@@ -16,6 +16,11 @@
 
 **验收**：原 `main.py` 跑通的日志；`pytest tests/test_risk.py` 全部通过。
 
+**M0 审查遗留（已知、暂不处理）**：
+- T1 float64 的 1e-6 容差余量有限：`SCARCE_loss` 用 float32 构造先验（`utils_algo.py` L34–36，`ccp` 与 0.9 差约 2.4e-8），测试传入精确 float64 `1/K`。随机对称 logits 下实测差 9e-8–5.9e-7；非对称 logits（±10）下约 2.4e-6，会超过 1e-6。改用逐位相同的先验后差 ≤ 4e-15。判断为参照实现的精度问题而非 `risk.py` 的 bug，为可读性不在测试中处理。若今后 T1 在新用例上失败，先排查此原因。
+- `scar_ovr_risk` 不检查权重中的 NaN/inf：NaN 能通过 `w < 0` 的校验；组外的 inf 乘以掩码 0 得 NaN。两者都会使 `total` 变为 NaN 且不报错。SPEC 未要求此校验，留到 M3 实现 DIW 时根据权重来源决定是否处理。
+- `scarda/risk.py::batch_pibar` 未被调用（死代码），对整数 ybar 固定返回 float32，与主路径跟随 logits dtype 不一致。
+
 ---
 
 ## M1 数据协议 + source_only 端到端（11/20–21）

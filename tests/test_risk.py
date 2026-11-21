@@ -95,6 +95,20 @@ def test_t1_with_empty_class(dtype, missing):
     assert out.empty_neg == 0
 
 
+def test_t1_with_empty_negative_group():
+    """All samples share one complementary label -> (0,-) is empty, (k,+) empty for k != 0."""
+    K, n = 10, 32
+    g = torch.Generator().manual_seed(13)
+    labels = torch.zeros(n, dtype=torch.long)
+    logits = 3.0 * torch.randn(n, K, generator=g, dtype=torch.float64)
+    ref = SCARCE_loss(logits, labels, CPU)
+    out = scar_ovr_risk(logits, _onehot(labels, K), _uniform_pi(K, torch.float64),
+                        correction="abs", pibar_mode="batch")
+    assert abs(out.total.item() - ref.item()) < 1e-6
+    assert out.empty_pos == K - 1
+    assert out.empty_neg == 1
+
+
 def test_t1_gradients_match_scarce():
     K, n = 10, 64
     g = torch.Generator().manual_seed(11)
@@ -173,8 +187,6 @@ def test_t3_correction_branches(correction):
     out = scar_ovr_risk(logits, ybar, pi, correction=correction, pibar_mode="batch")
     assert (out.P_raw[:6] < 0).all() and (out.P_raw[6:] > 0).all()
     assert out.neg_rate == pytest.approx(expected_neg_rate)
-    corr = {"abs": out.P_raw.abs(), "relu": out.P_raw.clamp_min(0), "none": out.P_raw}[correction]
-    assert out.total.item() == pytest.approx((out.N + corr).sum().item(), abs=1e-12)
     ref_total, ref_P = _reference_risk(logits, ybar, pi, ybar.mean(0), None, None, correction)
     assert out.total.item() == pytest.approx(ref_total, abs=1e-9)
     assert out.P_raw.tolist() == pytest.approx(ref_P, abs=1e-9)
@@ -198,6 +210,7 @@ def test_weighted_matches_reference():
     w_neg = torch.rand(n, K, generator=g, dtype=torch.float64) * 3
     pi = torch.softmax(torch.randn(K, generator=g, dtype=torch.float64), 0)
     pibar = torch.rand(K, generator=g, dtype=torch.float64) * 0.4
+    ybar[:5] = 0.0  # explicit all-zero (unlabeled) rows
     for corr in ("abs", "relu", "none"):
         out = scar_ovr_risk(logits, ybar, pi, pibar, w_pos, w_neg, corr, "fixed")
         ref_total, ref_P = _reference_risk(logits, ybar, pi, pibar, w_pos, w_neg, corr)
@@ -223,6 +236,24 @@ def test_zero_weight_sum_group_counts_as_empty():
     assert out.empty_neg == 1  # (1,-)
     assert out.N[0].item() == 0.0 and out.N[3].item() == 0.0
     assert torch.isfinite(out.total)
+    ref_total, ref_P = _reference_risk(logits, ybar, pi, pibar, w_pos, None, "none")
+    assert out.total.item() == pytest.approx(ref_total, abs=1e-9)
+    assert out.P_raw.tolist() == pytest.approx(ref_P, abs=1e-9)
+
+
+def test_all_zero_ybar():
+    K, n = 4, 8
+    g = torch.Generator().manual_seed(17)
+    logits = torch.randn(n, K, generator=g, dtype=torch.float64)
+    ybar = torch.zeros(n, K, dtype=torch.float64)
+    pi = _uniform_pi(K, torch.float64)
+    pibar = torch.full((K,), 0.2, dtype=torch.float64)
+    out = scar_ovr_risk(logits, ybar, pi, pibar, None, None, "abs", "fixed")
+    assert out.empty_pos == K and out.empty_neg == 0
+    assert torch.equal(out.N, torch.zeros(K, dtype=torch.float64))
+    ref_total, ref_P = _reference_risk(logits, ybar, pi, pibar, None, None, "abs")
+    assert out.total.item() == pytest.approx(ref_total, abs=1e-9)
+    assert out.P_raw.tolist() == pytest.approx(ref_P, abs=1e-9)
 
 
 def test_argument_validation():
