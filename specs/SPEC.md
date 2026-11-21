@@ -139,6 +139,10 @@ $\pi_{\mathrm{te}}$ 在 v1 中**使用已知真值**（来自配置），报告�
 
 实现（M1 确认）：为避免同一原始种子开多个生成器造成流相关，各用途的 numpy 生成器由 `SeedSequence([seed, tag])` 派生，tag：`split_train=1, split_test=2, ybar_S_tr=3, ybar_T_tr=4, ybar_T_val=5, loader=6`。模型初始化用 `torch.manual_seed(seed)`。报告中说明此派生方式。
 
+检查脚本专用 tag（M2 确认，不进入任何训练路径）：`scripts/check_identity.py` 的 bootstrap 用 `100`；`S_tr` 互补标签的独立重抽（`oracle.fresh_source_pool`）用 `101`。
+
+**风险恒等式检查（M2 确认）**：(c) 与阴性对照必须在与被测分类器**独立**的 $\bar y$ 上计算。分类器若用 `S_tr.ybar` 训练，则在 `S_tr` 互补标签的独立重抽（保留 $x,y$，同 `gen` 与 $c_{tr}$）上计算；该重抽只能由 `oracle.py` 生成（需读 `S_tr` 真标签），只用于检查，不用于训练或任何选择。
+
 ## 5. Oracle 权重（类先验偏移下的精确形式）
 
 对 `S_tr` 中真标签为 $y$ 的样本 $i$，在组 $(k,s)$ 中：

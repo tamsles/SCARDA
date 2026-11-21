@@ -54,6 +54,26 @@
 **验收**：T5、T6 通过；`identity.json` 中三者一致（差异在给出的标准误范围内）；两个 run 完整落盘。
 **止损**：恒等式不一致 → 停止，不进入 M3，上报推导与数值。若 oracle_iw 的 accuracy 不优于 source_only，不视为失败，照常记录。
 
+**M2 结果记录**：
+- 状态：子任务 1–5 已完成（commits `ca14288`, `5bbac3d`, `48cb74d`, `a9c674c`, `a6dd4b5`；审查后修正 `1674a38`, `40b790a`）；`pytest -q` 95 passed。
+- 独立审查结论：`oracle.py` 与 SPEC §5 逐项一致；§5 公式经纸面推导成立（只用到每个 $k$ 的边缘 SCAR，`single_uniform` 同样适用）；T6 三种风险均为 `correction=none`、同一固定分类器；oracle 只读 `S_tr` 真标签；bootstrap 标准误计算本身正确。
+- 审查发现并已修正：`source_only_1epoch` 用 `S_tr.ybar` 训练，原先 (c) 也在同一份 `S_tr.ybar` 上计算，偏低约 0.20（对 40 次独立重抽 $\bar y$，0/40 低于训练标签上的值）。修正：(c) 与 control 改在 `S_tr` 互补标签的**独立重抽**上计算（`oracle.fresh_source_pool`，`SeedSequence([seed, 101])`，同 `gen` 与 $c_{tr}$，保留 $x,y$）；训练标签上的值作为诊断写入 `in_sample_training_ybar`。这是对 M2.4 检查方法的补充，分类器定义未变。
+- `results/checks/identity.json`（commit `1674a38`，clean；$\rho=20$, seed 0, B=2000）：
+
+  | 分类器 | a−b | a−c | b−c | a−control |
+  |---|---|---|---|---|
+  | `random_init` | z +1.52 | z −0.31 | z −1.59 | z −2.75（未检出） |
+  | `source_only_1epoch` | z +0.12 | z −0.53 | z −0.30 | z −5.80（检出） |
+
+- Runs（commit `a6dd4b5`，clean；修正只新增函数、不影响训练路径）：`oracle_iw_rho20_nte2000_seed0_5e7c20bf`（acc_last10 0.8928）、`target_only_rho20_nte2000_seed0_201c1b18`（acc_last10 0.5995）。
+
+**M2 审查遗留（已知、暂不处理）**：
+- **MNIST 恒等式检查检出力不足**：`random_init` 的阴性对照 a−control 未越过 3 SE（z −2.75）；把 oracle 权重全换为 1（仍用 $\pi_{te}$、T_tr 的 $\hat{\bar\pi}$）在修正前的数据上 a−c 的 z 为 +2.49 / +1.41，同样会判为一致。即 `identity.json` 对"权重是否正确"几乎没有区分力，权重正确性的证据主要来自 T5/T6。可选改进：增加"只去掉权重"的对照并在 JSON 中记录是否检出。
+- **(b) 精度过低**：T_val 仅 2000，`source_only_1epoch` 上 (b) 的 SE ≈ 0.17（风险值 1.43），a−b、b−c 几乎无信息。
+- **(a) 与 (b)(c) 来自不同基数据**：(a) 用 MNIST test（T_eval），(b)(c) 用 MNIST train。恒等式隐含两者 $p(x\mid y)$ 相同。真标签、按 $\pi_{te}$ 重加权的 S_tr 风险与 (a) 之差 z = +2.82（random_init）/ −2.27（source_only_1epoch），方向相反、处于临界附近，不足以下结论；报告中须声明此假设。
+- **`group_weight_tables` 不校验 $c\in[0,1)$**：$c_{tr}=1$ 时 `W_neg` 出现 inf/NaN，乘掩码 0 后得 NaN（即 M0 遗留的"组外 inf × 0"路径）。默认配置不触发。
+- **T6 阴性对照不隔离权重**：`test_T6_negative_control_detected` 的 control 同时换了 $\pi$、$\bar\pi$ 并去掉权重，测的是"偏移存在"。T6 对权重错误本身是敏感的（审查中的变异测试：权重全为 1 → |z| ≈ 47–49；$w^-$ 去掉 $c$ 因子 → z +29.8 / +3.6；仅 $w^+$ 置 1 → prototype 检不出（z −0.6），random z −147），但 $w^-$ 的 $c$ 因子错误在 random 分类器上只有 z +3.6，余量小。
+
 ---
 
 ## M3 DIW + 冻结（11/22）
