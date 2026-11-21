@@ -19,15 +19,15 @@
 **M0 审查遗留（已知、暂不处理）**：
 - T1 float64 的 1e-6 容差余量有限：`SCARCE_loss` 用 float32 构造先验（`utils_algo.py` L34–36，`ccp` 与 0.9 差约 2.4e-8），测试传入精确 float64 `1/K`。随机对称 logits 下实测差 9e-8–5.9e-7；非对称 logits（±10）下约 2.4e-6，会超过 1e-6。改用逐位相同的先验后差 ≤ 4e-15。判断为参照实现的精度问题而非 `risk.py` 的 bug，为可读性不在测试中处理。若今后 T1 在新用例上失败，先排查此原因。
 - `scar_ovr_risk` 不检查权重中的 NaN/inf：NaN 能通过 `w < 0` 的校验；组外的 inf 乘以掩码 0 得 NaN。两者都会使 `total` 变为 NaN 且不报错。SPEC 未要求此校验，留到 M3 实现 DIW 时根据权重来源决定是否处理。
-- `scarda/risk.py::batch_pibar` 未被调用（死代码），对整数 ybar 固定返回 float32，与主路径跟随 logits dtype 不一致。
+- `scarda/risk.py::batch_pibar` 未被调用（死代码），对整数 ybar 固定返回 float32，与主路径跟随 logits dtype 不一致。〔已解决：M2 后重构中删除〕
 
 ---
 
 ## M1 数据协议 + source_only 端到端（11/20–21）
 
-1. `scarda/data.py`：按 SPEC §4 构造四个池、偏移先验、互补标签、`WeakSet` / `LabelVault`、split 哈希。
+1. `scarda/data.py`：按 SPEC §4 构造四个池、偏移先验、互补标签、`WeakSet` / `LabelVault`、split 哈希。〔重构注：`LabelVault` 已改为具名元组 `Labels`，split 哈希已移除〕
 2. `scarda/models.py`、`scarda/train.py`（先只支持 `source_only`、`target_only`）、`scarda/evaluate.py`、`scarda/io_utils.py`、`scripts/run.py`。
-3. `tests/test_data.py`（**T4**）：各池类计数精确等于目标计数；池两两不相交；$\bar y$ 从不包含真类；经验 $c$ 与设定值的偏差在 3 个标准误内（按池合并估计：$\hat c$ = 该池所有 $k\neq y$ 的 $(i,k)$ 对上 $\bar y_{ik}$ 的均值，$N$ = 这类对的个数，$\mathrm{SE}=\sqrt{c(1-c)/N}$；不逐类检验）；同 seed 两次生成哈希一致。
+3. `tests/test_data.py`（**T4**）：各池类计数精确等于目标计数；池两两不相交；$\bar y$ 从不包含真类；经验 $c$ 与设定值的偏差在 3 个标准误内（按池合并估计：$\hat c$ = 该池所有 $k\neq y$ 的 $(i,k)$ 对上 $\bar y_{ik}$ 的均值，$N$ = 这类对的个数，$\mathrm{SE}=\sqrt{c(1-c)/N}$；不逐类检验）；同 seed 两次生成哈希一致。〔重构注：已改为直接比较各池索引与 $ar y$ 数组〕
 4. `scripts/bench_time.py`：测 `source_only` 每 epoch 耗时（以及 GPU/CPU 信息）。
 5. 在真实 MNIST 上跑 `source_only`，$\rho=20$，seed 0，完整 epoch 数。
 
@@ -35,7 +35,7 @@
 
 **M1 结果记录**：
 - 状态：子任务 1–5 已完成（commits `da6e207`, `6ff9d21`, `f92510e`, `5c6ba80`）；`pytest -q` 73 passed。
-- 切分、隔离、哈希、seed 的确认方案已写入 SPEC §4.1/§4.3/§4.4/§4.5；训练与输出约定写入 SPEC §7/§8。
+- 切分、隔离、哈希、seed 的确认方案已写入 SPEC §4.1/§4.3/§4.4/§4.5〔重构注：§4.4 已改写为重构后的结构，哈希定义已移除〕；训练与输出约定写入 SPEC §7/§8。
 - 本地 run：`results/runs/source_only_rho20_nte2000_seed0_9bb48ece/`（RTX 3070 Laptop，100 epoch，0.307 s/epoch，git dirty），仅作开发验证，不计入主矩阵。
 - 决定：$E=100$（暂定，M3 冻结时最终确认）；矩阵规模在 M3 测得 Wisteria 上的 DIW 耗时后按 SPEC §9.2 的规则决定。计算平台为 Wisteria/BDEC-01（SPEC §9.1）。
 - 小重叠：`target_only` 的训练代码已在 M1 实现，M2 只需跑 run。
@@ -57,7 +57,7 @@
 **M2 结果记录**：
 - 状态：子任务 1–5 已完成（commits `ca14288`, `5bbac3d`, `48cb74d`, `a9c674c`, `a6dd4b5`；审查后修正 `1674a38`, `40b790a`）；`pytest -q` 95 passed。
 - 独立审查结论：`oracle.py` 与 SPEC §5 逐项一致；§5 公式经纸面推导成立（只用到每个 $k$ 的边缘 SCAR，`single_uniform` 同样适用）；T6 三种风险均为 `correction=none`、同一固定分类器；oracle 只读 `S_tr` 真标签；bootstrap 标准误计算本身正确。
-- 审查发现并已修正：`source_only_1epoch` 用 `S_tr.ybar` 训练，原先 (c) 也在同一份 `S_tr.ybar` 上计算，偏低约 0.20（对 40 次独立重抽 $\bar y$，0/40 低于训练标签上的值）。修正：(c) 与 control 改在 `S_tr` 互补标签的**独立重抽**上计算（`oracle.fresh_source_pool`，`SeedSequence([seed, 101])`，同 `gen` 与 $c_{tr}$，保留 $x,y$）；训练标签上的值作为诊断写入 `in_sample_training_ybar`。这是对 M2.4 检查方法的补充，分类器定义未变。
+- 审查发现并已修正：`source_only_1epoch` 用 `S_tr.ybar` 训练，原先 (c) 也在同一份 `S_tr.ybar` 上计算，偏低约 0.20（对 40 次独立重抽 $\bar y$，0/40 低于训练标签上的值）。修正：(c) 与 control 改在 `S_tr` 互补标签的**独立重抽**上计算（`oracle.fresh_source_pool`〔重构注：现名 `oracle.fresh_source_ybar`〕，`SeedSequence([seed, 101])`，同 `gen` 与 $c_{tr}$，保留 $x,y$）；训练标签上的值作为诊断写入 `in_sample_training_ybar`。这是对 M2.4 检查方法的补充，分类器定义未变。
 - `results/checks/identity.json`（commit `1674a38`，clean；$\rho=20$, seed 0, B=2000）：
 
   | 分类器 | a−b | a−c | b−c | a−control |
