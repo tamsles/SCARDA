@@ -111,27 +111,18 @@ $\pi_{\mathrm{te}}$ 在 v1 中**使用已知真值**（来自配置），报告�
 - `gen=single_uniform` 时忽略配置中的 $c_{tr},c_{te}$，实际使用 $c=1/(K-1)$，并把实际值写入 `meta.json`。
 - 注：`bernoulli` 下全零行约占 T 侧 $0.8^9\approx13.4\%$、S 侧 $0.7^9\approx4\%$，符合 §2 设定。
 
-### 4.4 可见性隔离（必须由代码结构保证）
+### 4.4 标签可见性
 
-- 训练侧只拿到 `WeakSet(x, ybar)`；真标签放在单独的 `LabelVault`，仅 `evaluate.py` 与 `oracle.py` 可读。
-- `oracle.py` 只读取 `S_tr` 的真标签。
-- 记录 split 哈希：各池索引数组与 $\bar y$ 数组的 sha256。
+- 方法学要求：训练、权重估计与模型选择只使用 $(x,\bar y)$；真标签只用于最终评估（`T_eval`）和 oracle 权重（仅 `S_tr`）。
+- 不为此编写结构性测试（`ast`/签名检查），由代码审查保证。
 
-**结构约定（M1 确认）**：
+**实现（M2 后重构）**：
 
-- `scarda/data.py` 的构建函数（`build_from_arrays` / `build_mnist`）是**唯一**同时接触 $x$ 与 $y$ 的代码，用 $y$ 切池、生成 $\bar y$。这是 AGENTS.md §2.1 的唯一例外。torchvision dataset 对象不出函数。
-- `WeakSet` 为 frozen dataclass，字段只有 `name, x, ybar`，**不含索引**（索引加基数据即可反查标签）。
-- `LabelVault` 只保存 `S_tr` 真标签（`source_labels()`，供 `oracle.py`）与 `T_eval` 的 $(x,y)$（`eval_set()`，供 `evaluate.py`）。`T_tr`、`T_val` 的真标签生成 $\bar y$ 后即丢弃。`T_eval` 的 $x$ 也只在 vault 中。
-- 索引、类计数、哈希放在 `SplitRecord`，只交给 `io_utils` 写 `meta.json`，不进入训练。
-- 每 epoch 的 accuracy 由 `evaluate.make_evaluator(vault)` 返回的**不透明回调**计算；`train()` 的签名不含 vault、$y$ 或索引，回调结果只写日志、不参与任何决策。
-- 测试（T4）用自己持有的合成 $y$ 加 `SplitRecord` 的索引做检查，不为测试在 vault 中开后门。
-
-**split 哈希定义（M1 确认）**：
-
-- 每个数组：`sha256(dtype.str ‖ "|" ‖ shape ‖ "|" ‖ bytes)`；索引为 int64 小端、规范行序（见 4.1），$\bar y$ 为 uint8、C 连续。
-- 键：`{S_tr,T_tr,T_val,T_eval}/idx` 与 `{S_tr,T_tr,T_val}/ybar`（`T_eval` 无 $\bar y$）。`T_tr` 哈希的是**实际使用的 $n_{te}$ 子集**。
-- `split_hash` = 对按键排序的 `"key:hex"` 行（换行连接）再取 sha256。
-- 另记 `base_hash`（MNIST train/test targets 的哈希），用于发现数据集版本差异。不哈希 $x$（由索引与基数据唯一决定）。
+- `scarda/data.py` 的 `build_from_arrays` / `build_mnist` 是**唯一**同时接触 $x$ 与 $y$ 的代码（AGENTS.md §2.1 的唯一例外），返回 `(pools, labels, info)`：
+  - `pools`：`S_tr`、`T_tr`、`T_val` 的 `WeakSet(name, x, ybar)`，交给训练；
+  - `labels`：具名元组 `Labels(source_y, eval_x, eval_y)`，`source_y` 只给 `oracle.py`，`eval_x/eval_y` 只给 `evaluate.py`；`T_tr`、`T_val` 的真标签生成 $\bar y$ 后即丢弃；
+  - `info`：索引、类计数、$\hat{\bar\pi}$、$\pi$、实际 $c$，只写入 `meta.json`（不含索引），不进入训练。
+- `train.fit` 的参数不含真标签；每 epoch 的 accuracy 由 `evaluate.make_evaluator` 返回的回调计算，只写日志、不参与任何决策。
 
 ### 4.5 Seed
 
@@ -139,7 +130,7 @@ $\pi_{\mathrm{te}}$ 在 v1 中**使用已知真值**（来自配置），报告�
 
 实现（M1 确认）：为避免同一原始种子开多个生成器造成流相关，各用途的 numpy 生成器由 `SeedSequence([seed, tag])` 派生，tag：`split_train=1, split_test=2, ybar_S_tr=3, ybar_T_tr=4, ybar_T_val=5, loader=6`。模型初始化用 `torch.manual_seed(seed)`。报告中说明此派生方式。
 
-检查脚本专用 tag（M2 确认，不进入任何训练路径）：`scripts/check_identity.py` 的 bootstrap 用 `100`；`S_tr` 互补标签的独立重抽（`oracle.fresh_source_pool`）用 `101`。
+检查脚本专用 tag（M2 确认，不进入任何训练路径）：`scripts/check_identity.py` 的 bootstrap 用 `100`；`S_tr` 互补标签的独立重抽（`oracle.fresh_source_ybar`）用 `101`。
 
 **风险恒等式检查（M2 确认）**：(c) 与阴性对照必须在与被测分类器**独立**的 $\bar y$ 上计算。分类器若用 `S_tr.ybar` 训练，则在 `S_tr` 互补标签的独立重抽（保留 $x,y$，同 `gen` 与 $c_{tr}$）上计算；该重抽只能由 `oracle.py` 生成（需读 `S_tr` 真标签），只用于检查，不用于训练或任何选择。
 
@@ -185,19 +176,20 @@ $\pi_{\mathrm{te}}$ 在 v1 中**使用已知真值**（来自配置），报告�
 `results/runs/{method}_rho{ρ}_nte{n}_seed{s}_{cfghash8}/`：
 
 - `config.yaml`：完整解析后的配置
-- `meta.json`：git commit、dirty 标志、python/torch 版本、device、split 哈希、开始/结束时间、耗时
+- `meta.json`：seed、python/torch 版本、device、开始/结束时间、耗时、各池实际类计数与 $\hat{\bar\pi}$
 - `metrics.csv`：每 epoch 一行：`epoch, step, train_loss_mean, val_weak_risk, target_acc, target_bal_acc, neg_rate, empty_pos, empty_neg, ess_pos_mean, ess_neg_mean, w_max, fallback, kmm_iters_mean, epoch_time`
 - `final.json`：`acc_last10, acc_last, bal_acc_last10, bal_acc_last`
 
 M1 确认的补充约定：
 
-- `meta.json` 在上述字段之外还记录：`split_hashes`（各池哈希）、`base_hash`、`pools`（各池目标/实际类计数、经验 $\hat{\bar\pi}$、$\pi_{tr}$、$\pi_{te}$、实际 $c_{tr},c_{te}$）、`git_dirty_files`、`config_hash`、GPU 型号与 CUDA 版本。
+- `meta.json` 另记录 git commit（只为把结果对应到代码版本）与 GPU 型号；不记录 split 哈希、dirty 标志等。
+- 运行目录名末尾的 8 位配置哈希用于区分不同配置（如 M3 的 $B$）并支持跳过已完成的 run。
 - `metrics.csv`：`neg_rate, empty_pos, empty_neg` 为该 epoch 内各 step 的平均值；无权重方法的 `ess_pos_mean, ess_neg_mean, w_max, fallback, kmm_iters_mean` 写 `nan`；`epoch_time` 包含 `T_val` 弱标签风险与 `T_eval` 评估。
 - 配置哈希不包含 `device, data_root, out_root`（不影响结果的字段）。
 
 ESS 比例定义为 $(\sum w)^2/(m\sum w^2)$，按组计算后对 $(k,s)$ 取平均。`final.json` 存在时跳过该 run（支持断点续跑）。
 
-汇总：`scripts/summarize.py` 只读 `results/runs/`，输出 `results/summary/main_table.{csv,md}`、`paired_diffs.csv`（各方法减 `source_only`，按 seed 配对，给出均值、标准差、95% t 区间）、`fig_acc_vs_nte.png`、`fig_ess.png`，并生成 `results/summary/REPORT_FACTS.md`（报告可引用的数字清单，每条注明来源文件）。
+汇总：`scripts/summarize.py` 只读 `results/runs/`，输出 `results/summary/main_table.{csv,md}`、`paired_diffs.csv`（各方法减 `source_only`，按 seed 配对，给出均值、标准差、95% t 区间）、`fig_acc_vs_nte.png`、`fig_ess.png`。
 
 ## 9. 主实验矩阵（M3 冻结时确认）
 
@@ -229,10 +221,10 @@ SCARCE/                      # fork，根目录原始文件保持不变
   scarda/  __init__.py config.py data.py risk.py oracle.py diw.py models.py
            train.py evaluate.py io_utils.py
   scripts/ run.py run_matrix.py summarize.py check_identity.py bench_time.py
-  configs/ base.yaml smoke.yaml matrix_main.yaml frozen.yaml
-  tests/   test_risk.py test_data.py test_oracle.py test_diw.py test_isolation.py test_smoke.py
+  configs/ base.yaml matrix_main.yaml frozen.yaml
+  tests/   test_risk.py test_data.py test_oracle.py test_diw.py
   results/ runs/(gitignore) checks/ summary/
-  requirements.txt  .github/workflows/ci.yml  README_SCARDA.md
+  requirements.txt  README_SCARDA.md
 ```
 
 入口：`python scripts/run.py --config configs/base.yaml method=diw rho=20 n_te=2000 seed=0`

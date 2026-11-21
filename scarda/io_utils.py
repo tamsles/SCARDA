@@ -4,7 +4,6 @@ from __future__ import annotations
 import csv
 import json
 import math
-import platform
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -18,35 +17,25 @@ from scarda.config import Config, config_dict, config_hash
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
-def run_name(cfg: Config) -> str:
-    rho = int(cfg.rho) if float(cfg.rho).is_integer() else cfg.rho
-    return f"{cfg.method}_rho{rho}_nte{cfg.n_te}_seed{cfg.seed}_{config_hash(cfg)[:8]}"
-
-
 def run_dir(cfg: Config) -> Path:
+    """results/runs/{method}_rho{ρ}_nte{n}_seed{s}_{cfghash8}; the hash separates e.g. different B."""
+    rho = int(cfg.rho) if float(cfg.rho).is_integer() else cfg.rho
     root = Path(cfg.out_root)
     if not root.is_absolute():
         root = REPO_ROOT / root
-    return root / run_name(cfg)
+    return root / f"{cfg.method}_rho{rho}_nte{cfg.n_te}_seed{cfg.seed}_{config_hash(cfg)[:8]}"
 
 
-def git_info() -> dict:
-    def _git(*args):
-        return subprocess.run(["git", *args], cwd=REPO_ROOT, capture_output=True, text=True).stdout.strip()
-
+def run_info(device: torch.device) -> dict:
+    """Code version and environment of a run."""
     try:
-        commit = _git("rev-parse", "HEAD")
-        status = _git("status", "--porcelain", "--untracked-files=no")
-        return {"git_commit": commit, "git_dirty": bool(status), "git_dirty_files": status.splitlines()}
+        commit = subprocess.run(["git", "rev-parse", "HEAD"], cwd=REPO_ROOT, capture_output=True, text=True).stdout.strip()
     except OSError:
-        return {"git_commit": None, "git_dirty": None, "git_dirty_files": []}
-
-
-def device_info(device: torch.device) -> dict:
-    info = {"device": str(device), "cpu": platform.processor() or platform.machine()}
+        commit = None
+    info = {"git_commit": commit or None, "python": sys.version.split()[0], "torch": torch.__version__,
+            "device": str(device)}
     if device.type == "cuda":
         info["gpu"] = torch.cuda.get_device_name(device)
-        info["cuda"] = torch.version.cuda
     return info
 
 
@@ -54,13 +43,9 @@ def now_iso() -> str:
     return datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
 
 
-def env_info() -> dict:
-    return {"python": sys.version.split()[0], "torch": torch.__version__, "platform": platform.platform()}
-
-
 def write_config(path: Path, cfg: Config) -> None:
     with open(path / "config.yaml", "w", encoding="utf-8") as f:
-        yaml.safe_dump({**config_dict(cfg), "config_hash": config_hash(cfg)}, f, sort_keys=False)
+        yaml.safe_dump(config_dict(cfg), f, sort_keys=False)
 
 
 def write_json(path: Path, obj: dict) -> None:

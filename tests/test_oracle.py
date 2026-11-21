@@ -6,7 +6,7 @@ import torch
 import _synth as S
 from scarda.config import Config
 from scarda.data import build_from_arrays, gen_ybar, target_prior, uniform_prior
-from scarda.oracle import fresh_source_pool, group_weight_tables, oracle_weights, oracle_weights_from_vault
+from scarda.oracle import fresh_source_ybar, group_weight_tables, oracle_weights, source_oracle_weights
 from scarda.train import fit, method_setup
 
 
@@ -95,14 +95,14 @@ def _tiny_pools(method):
     x_te = torch.from_numpy(rng.standard_normal((len(y_te), 1, 2, 2)).astype(np.float32))
     cfg = Config(method=method, rho=20, n_tr=1500, n_te=100, n_te_max=400, n_val=400, n_eval=300, seed=0,
                  hidden=8, device="cpu")
-    pools, vault, _ = build_from_arrays(x_tr, y_tr, x_te, y_te, cfg)
-    return cfg, pools, vault
+    pools, labels, _ = build_from_arrays(x_tr, y_tr, x_te, y_te, cfg)
+    return cfg, pools, labels
 
 
 def test_oracle_iw_trains_and_logs_weight_diagnostics():
-    cfg, pools, vault = _tiny_pools("oracle_iw")
-    sw = oracle_weights_from_vault(vault, pools["S_tr"], cfg)
-    _, _, pibar = method_setup(cfg, pools, sw)
+    cfg, pools, labels = _tiny_pools("oracle_iw")
+    sw = source_oracle_weights(labels.source_y, pools["S_tr"].ybar, cfg)
+    _, _, pibar = method_setup(cfg, pools)
     torch.testing.assert_close(pibar, pools["T_tr"].pibar_hat())
     model, hist = fit(cfg, pools, lambda m: {"target_acc": 0.0, "target_bal_acc": 0.0}, epochs=2, source_weights=sw)
     assert len(hist) == 2 and isinstance(model, torch.nn.Module)
@@ -113,10 +113,10 @@ def test_oracle_iw_trains_and_logs_weight_diagnostics():
         assert np.isnan(r["fallback"]) and np.isnan(r["kmm_iters_mean"])
 
 
-def test_fresh_source_pool_is_an_independent_scar_redraw():
-    cfg, pools, vault = _tiny_pools("oracle_iw")
-    S, y = pools["S_tr"], vault.source_labels()
-    ybar, (wp, wn) = fresh_source_pool(vault, S, cfg, np.random.default_rng(np.random.SeedSequence([0, 101])))
+def test_fresh_source_ybar_is_an_independent_scar_redraw():
+    cfg, pools, labels = _tiny_pools("oracle_iw")
+    S, y = pools["S_tr"], labels.source_y
+    ybar, (wp, wn) = fresh_source_ybar(y, cfg, np.random.default_rng(np.random.SeedSequence([0, 101])))
     assert ybar.shape == S.ybar.shape and ybar.dtype == torch.uint8
     assert not bool(ybar[torch.arange(len(y)), y].any())  # never the true class
     assert not torch.equal(ybar, S.ybar)
@@ -129,17 +129,16 @@ def test_fresh_source_pool_is_an_independent_scar_redraw():
     assert abs(agree - p) <= 3 * np.sqrt(p * (1 - p) / N)
     ref = oracle_weights(y, ybar, uniform_prior(cfg.K), target_prior(cfg.K, cfg.rho), *cfg.effective_c)
     assert torch.equal(wp, ref[0]) and torch.equal(wn, ref[1])
-    ybar2, _ = fresh_source_pool(vault, S, cfg, np.random.default_rng(np.random.SeedSequence([0, 101])))
+    ybar2, _ = fresh_source_ybar(y, cfg, np.random.default_rng(np.random.SeedSequence([0, 101])))
     assert torch.equal(ybar, ybar2)
-    with pytest.raises(ValueError):
-        fresh_source_pool(vault, pools["T_tr"], cfg, np.random.default_rng(0))
 
 
 def test_source_weights_only_for_oracle_iw():
-    cfg, pools, vault = _tiny_pools("oracle_iw")
+    noop = lambda m: {"target_acc": 0.0, "target_bal_acc": 0.0}  # noqa: E731
+    cfg, pools, _ = _tiny_pools("oracle_iw")
     with pytest.raises(ValueError):
-        method_setup(cfg, pools, None)
-    cfg2, pools2, vault2 = _tiny_pools("source_only")
-    sw = oracle_weights_from_vault(vault2, pools2["S_tr"], cfg2)
+        fit(cfg, pools, noop, epochs=1, source_weights=None)
+    cfg2, pools2, labels2 = _tiny_pools("source_only")
+    sw = source_oracle_weights(labels2.source_y, pools2["S_tr"].ybar, cfg2)
     with pytest.raises(ValueError):
-        method_setup(cfg2, pools2, sw)
+        fit(cfg2, pools2, noop, epochs=1, source_weights=sw)

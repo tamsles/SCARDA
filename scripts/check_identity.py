@@ -2,7 +2,7 @@
 
     python scripts/check_identity.py --config configs/base.yaml [rho=20 n_te=2000 seed=0] [--boot 2000]
 
-For two fixed classifiers -- (1) the random initialization used by train() (torch.manual_seed(seed)),
+For two fixed classifiers -- (1) the random initialization used by train.fit (models.build_model),
 (2) source_only trained for 1 epoch -- computes, all with correction=none:
 
   (a) true-label target OVR risk on T_eval:   mean_i [ell(f_y) + sum_{k!=y} ell(-f_k)]
@@ -11,7 +11,7 @@ For two fixed classifiers -- (1) the random initialization used by train() (torc
   control: unweighted source risk on S_tr:     pi_tr, pibar = S_tr frequency (expected to differ)
 
 (c) and control are evaluated on an independent redraw of the S_tr complementary labels
-(oracle.fresh_source_pool, generator SeedSequence([seed, 101])), not on S_tr.ybar: classifier (2) is
+(oracle.fresh_source_ybar, generator SeedSequence([seed, 101])), not on S_tr.ybar: classifier (2) is
 trained on S_tr.ybar, so its weak risk on those labels is biased low (the identity needs a classifier
 independent of the evaluation labels). The values on the training labels are kept as a diagnostic
 ("in_sample_training_ybar"), without standard errors.
@@ -37,12 +37,12 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from scarda.config import config_hash, load_config  # noqa: E402
+from scarda.config import load_config  # noqa: E402
 from scarda.data import build_mnist, target_prior, uniform_prior  # noqa: E402
 from scarda.evaluate import make_evaluator, true_ovr_losses  # noqa: E402
-from scarda.io_utils import device_info, env_info, git_info, now_iso  # noqa: E402
-from scarda.models import MLP  # noqa: E402
-from scarda.oracle import fresh_source_pool, oracle_weights_from_vault  # noqa: E402
+from scarda.io_utils import now_iso, run_info  # noqa: E402
+from scarda.models import build_model, predict_logits  # noqa: E402
+from scarda.oracle import fresh_source_ybar, source_oracle_weights  # noqa: E402
 from scarda.risk import scar_ovr_risk  # noqa: E402
 from scarda.train import fit, resolve_device  # noqa: E402
 
@@ -68,20 +68,18 @@ def boot_counts(rng, n, b):
     return rng.multinomial(n, np.full(n, 1.0 / n), size=b).astype(np.float64)
 
 
-@torch.no_grad()
-def logits_of(model, x, device, bs=4096):
-    model.eval()
-    return torch.cat([model(x[i:i + bs].to(device)) for i in range(0, len(x), bs)]).double().cpu()
+def logits_of(model, x, device):
+    return predict_logits(model, x, device).double().cpu()
 
 
-def evaluate_classifier(model, pools, vault, eval_ybar_S, weights, train_ybar_S, train_weights, cfg, device, B,
+def evaluate_classifier(model, pools, labels, eval_ybar_S, weights, train_ybar_S, train_weights, cfg, device, B,
                         rng, chunk=100):
     """(c) and control use `eval_ybar_S` / `weights` (the independent redraw); `train_ybar_S` /
     `train_weights` (S_tr.ybar) only give the in-sample diagnostic point values."""
     pi_te, pi_tr = target_prior(cfg.K, cfg.rho), uniform_prior(cfg.K)
     S, Tt, V = pools["S_tr"], pools["T_tr"], pools["T_val"]
     fS, fV = logits_of(model, S.x, device), logits_of(model, V.x, device)
-    a_loss = true_ovr_losses(model, vault, device).numpy()
+    a_loss = true_ovr_losses(model, labels.eval_x, labels.eval_y, device).numpy()
 
     def parts(f, ybar, wp=None, wn=None):
         Yp = ybar.double().numpy()
@@ -154,17 +152,15 @@ def main(argv=None) -> int:
     cfg = load_config(args.config, args.overrides)
     device = resolve_device(cfg.device)
 
-    pools, vault, record = build_mnist(cfg)
-    train_weights = oracle_weights_from_vault(vault, pools["S_tr"], cfg)
-    eval_ybar_S, weights = fresh_source_pool(
-        vault, pools["S_tr"], cfg, np.random.default_rng(np.random.SeedSequence([cfg.seed, FRESH_YBAR_SEED_TAG])))
+    pools, labels, _ = build_mnist(cfg)
+    train_weights = source_oracle_weights(labels.source_y, pools["S_tr"].ybar, cfg)
+    eval_ybar_S, weights = fresh_source_ybar(
+        labels.source_y, cfg, np.random.default_rng(np.random.SeedSequence([cfg.seed, FRESH_YBAR_SEED_TAG])))
     rng = np.random.default_rng(np.random.SeedSequence([cfg.seed, BOOT_SEED_TAG]))
 
-    torch.manual_seed(cfg.seed)  # identical to the initialization in train.fit
-    init_model = MLP(input_dim=int(np.prod(pools["S_tr"].x.shape[1:])), hidden_dim=cfg.hidden,
-                     output_dim=cfg.K).to(device)
+    init_model = build_model(pools["S_tr"].x.shape[1:], cfg).to(device)  # same initialization as train.fit
     src_cfg = dataclasses.replace(cfg, method="source_only")
-    trained, hist = fit(src_cfg, pools, make_evaluator(vault, cfg.K, device), epochs=1)
+    trained, hist = fit(src_cfg, pools, make_evaluator(labels.eval_x, labels.eval_y, cfg.K, device), epochs=1)
 
     result = {
         "description": "Risk identity check (TASKS M2.4): (a) true-label target OVR risk on T_eval; "
@@ -176,14 +172,13 @@ def main(argv=None) -> int:
                        "SE: nonparametric bootstrap per pool; diff SE = sqrt(SE_u^2+SE_v^2).",
         "fresh_ybar_seed": f"SeedSequence([{cfg.seed}, {FRESH_YBAR_SEED_TAG}])",
         "config": {"rho": cfg.rho, "n_te": cfg.n_te, "seed": cfg.seed, "gen": cfg.gen,
-                   "c_tr": cfg.effective_c[0], "c_te": cfg.effective_c[1], "config_hash": config_hash(cfg)},
+                   "c_tr": cfg.effective_c[0], "c_te": cfg.effective_c[1]},
         "bootstrap": {"B": args.boot, "seed": f"SeedSequence([{cfg.seed}, {BOOT_SEED_TAG}])"},
-        "split_hash": record.split_hash,
-        **git_info(), **env_info(), **device_info(device), "time": now_iso(),
+        **run_info(device), "time": now_iso(),
         "classifiers": {},
     }
     for name, model in (("random_init", init_model), ("source_only_1epoch", trained)):
-        res = evaluate_classifier(model, pools, vault, eval_ybar_S, weights, pools["S_tr"].ybar, train_weights,
+        res = evaluate_classifier(model, pools, labels, eval_ybar_S, weights, pools["S_tr"].ybar, train_weights,
                                   cfg, device, args.boot, rng)
         result["classifiers"][name] = res
         print(f"== {name}")

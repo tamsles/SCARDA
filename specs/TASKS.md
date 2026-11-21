@@ -74,6 +74,11 @@
 - **`group_weight_tables` 不校验 $c\in[0,1)$**：$c_{tr}=1$ 时 `W_neg` 出现 inf/NaN，乘掩码 0 后得 NaN（即 M0 遗留的"组外 inf × 0"路径）。默认配置不触发。
 - **T6 阴性对照不隔离权重**：`test_T6_negative_control_detected` 的 control 同时换了 $\pi$、$\bar\pi$ 并去掉权重，测的是"偏移存在"。T6 对权重错误本身是敏感的（审查中的变异测试：权重全为 1 → |z| ≈ 47–49；$w^-$ 去掉 $c$ 因子 → z +29.8 / +3.6；仅 $w^+$ 置 1 → prototype 检不出（z −0.6），random z −147），但 $w^-$ 的 $c$ 因子错误在 random 分类器上只有 z +3.6，余量小。
 
+**M2 后重构（2026-11-21，按 AGENTS §1 精简）**：
+- 移除 `LabelVault`（改为具名元组 `Labels`）、`SplitRecord`/`PoolSpec`、split 哈希与 `base_hash`、git dirty 记录、`train()`/`fit()` 重复入口、`risk.batch_pibar` 死代码（即 M0 遗留第 3 条）；`oracle_weights_from_vault`/`fresh_source_pool` 改名为 `source_oracle_weights`/`fresh_source_ybar`，直接接收 `y`；新增 `models.build_model`/`predict_logits` 收拢重复代码。
+- 不变：`SeedSequence` tag、切池顺序、`gen_ybar`、`scar_ovr_risk`、batch 顺序、配置哈希（三个已有 run 的目录名不变）。
+- 验证（CPU）：重构前后在 MNIST（$\rho\in\{20,5\}$）上的各池 $x$/$\bar y$/索引/真标签、oracle 权重、独立重抽、三种方法 2 个 epoch 的全部指标与模型参数，共 33 项逐位相同；`check_identity.py`（B=100）的 `classifiers` 块完全相同。`pytest -q` 94 passed（删去 1 个隔离结构测试）。M1/M2 的已记录结果无需重跑。
+
 ---
 
 ## M3 DIW + 冻结（11/22）
@@ -83,10 +88,9 @@
    - 求解器与 `scipy.optimize.minimize`（SLSQP 或 trust-constr）在随机小问题上目标值相对差 < 1e-4，且约束满足；
    - $G_{te}$ 与 $G_{tr}$ 是同一组样本时，权重 ≈ 1；
    - 空组 / 小组触发 fallback 且计数正确。
-3. `tests/test_isolation.py`（**T8**）：训练入口的签名与数据对象不含真标签；`T_eval` 索引不出现在任何训练侧对象中；用 `ast`/grep 检查训练与权重模块未导入 `LabelVault`。
-4. `tests/test_smoke.py`（**T9**）：合成数据、2 个 epoch，5 种方法各自跑通并写出全部输出文件。
-5. 按 SPEC §7 对 $B\in\{5,10\}$ 做选择，写入 `configs/frozen.yaml`；**在 Wisteria 上**用 `scripts/bench_time.py` 测 `source_only` 与 DIW 的单 epoch 耗时，按 SPEC §9.2 的规则给出矩阵规模建议（$P$、$H$ 与最终方案由人类确认）。
-6. `.github/workflows/ci.yml`：CPU 上运行 `pytest -q`。
+3. 按 SPEC §7 对 $B\in\{5,10\}$ 做选择，写入 `configs/frozen.yaml`；**在 Wisteria 上**用 `scripts/bench_time.py` 测 `source_only` 与 DIW 的单 epoch 耗时，按 SPEC §9.2 的规则给出矩阵规模建议（$P$、$H$ 与最终方案由人类确认）。
+
+（2026-11-21 精简：原 T8 标签隔离结构测试、T9 smoke 测试、CI 已移除，见 AGENTS §1。）
 
 **验收**：全部测试通过；`frozen.yaml` 提交；人类确认冻结方法、数据协议、选择规则与矩阵（SPEC §9）后，M3 结束。冻结后只允许修 bug，不加功能。
 **止损**：若 DIW 训练出现 NaN / 权重退化（ESS 比例长期 < 0.05）且当天无法定位，上报；主结果改为 source/target/oracle 三者，DIW 作为部分结果与失败分析。
@@ -95,7 +99,7 @@
 
 ## M4 主实验（11/23–24）
 
-1. `scripts/run_matrix.py` 读取 `configs/matrix_main.yaml`，支持断点续跑与并行度参数。
+1. `scripts/run_matrix.py` 读取 `configs/matrix_main.yaml`，跳过已有 `final.json` 的 run（并行交给作业调度器）。
 2. 在 Wisteria/BDEC-01 上搭建环境并提交作业（作业脚本的位置与形式待定，开始 M4 前与人类确认）。
 3. 跑 M3 冻结的矩阵（SPEC §9）+ $\rho=1$ 对照，全部 run 在同一平台完成。
 
@@ -105,16 +109,14 @@
 
 ## M5 汇总与分析材料（11/25）
 
-1. `scripts/summarize.py`（SPEC §8 输出）。
-2. 生成 `REPORT_FACTS.md`：每个方法 × 条件的均值 ± 标准差、配对差及区间、ESS 与 fallback 统计、修正触发率、总运行次数与总耗时，每条注明来源文件。
+1. `scripts/summarize.py`（SPEC §8 输出）：每个方法 × 条件的均值 ± 标准差、配对差及 95% 区间、ESS 与 fallback 统计、修正触发率。
 
-**验收**：删除 `results/summary/` 后重跑 `summarize.py` 能得到完全相同的文件。
+**验收**：`results/summary/` 下有 SPEC §8 列出的表与图；报告中的数字都能在 `results/` 下找到（AGENTS §2.5）。
 
 ---
 
-## M6 复现验收（11/26–27）
+## M6 说明文档（11/26–27）
 
-1. 写 `README_SCARDA.md`：设定、与原 SCARCE 的差异、安装、smoke 命令、单个真实实验命令、矩阵命令、汇总命令、已知局限（oracle prior、仅类先验偏移、单数据集、自归一化有偏、ABS 修正沿用官方代码）。
-2. 在全新环境中全新 clone：安装 → `pytest -q` → smoke → 一个真实 run → `summarize.py`。
+1. 写 `README_SCARDA.md`：设定、与原 SCARCE 的差异、安装、单个实验命令、矩阵命令、汇总命令、已知局限（oracle prior、仅类先验偏移、单数据集、自归一化有偏、ABS 修正沿用官方代码）。
 
-**验收**：上述步骤的完整终端记录保存为 `results/checks/clean_env_log.txt`。
+**验收**：`README_SCARDA.md` 提交。（原"全新环境复现 + `clean_env_log.txt`"已移除。）

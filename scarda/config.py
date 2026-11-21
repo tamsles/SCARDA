@@ -1,4 +1,4 @@
-"""Run configuration: YAML + dataclass, with `key=value` CLI overrides (AGENTS.md §4)."""
+"""Run configuration: YAML + dataclass, with `key=value` CLI overrides."""
 from __future__ import annotations
 
 import dataclasses

@@ -7,29 +7,32 @@
 
 在官方 SCARCE 代码（https://github.com/wwangwitsel/SCARCE ，commit `0d55781`）基础上，实现
 **两域都只有 SCAR 互补标签** 的设定下，用 **DIW（每个 mini-batch 求解 KMM）** 估计按互补标签分组的
-条件密度比，对训练域 SCARCE 风险加权以逼近测试域风险；交付可复现代码、原始结果与汇总表，支撑一份研究报告。
+条件密度比，对训练域 SCARCE 风险加权以逼近测试域风险；交付代码、原始结果与汇总表，支撑一份研究报告。
 截止日期 2026-11-27。
 
 ## 1. 范围
 
-**必须做**：SPEC.md 中的数据协议、广义 SCAR-OVR 风险、oracle 权重、DIW 权重、5 种方法、关键测试、
-结果落盘与汇总脚本、干净环境复现。
+**必须做**：SPEC.md 中的数据协议、广义 SCAR-OVR 风险、oracle 权重、DIW 权重、5 种方法、关键测试
+（T1–T7，验证公式与求解器的正确性）、结果落盘与汇总脚本。
 
 **不做**（即使看起来"顺手"也不要做）：ADIW / warm-start PGD 加速、类先验估计（BBE 等）、
 support shift / IOS 实验、CIFAR / CLCIFAR、DANN / CLARINET 等额外基线、MLflow、Docker、
 超参数大搜索、修改原始 SCARCE 文件的行为。
+与方法无关的工程要求也不做：CI、全新环境复现验收、标签隔离的结构性测试（`ast`/签名检查）、
+smoke 测试、汇总文件逐字节可重现、`REPORT_FACTS.md`、对哈希/追溯信息的进一步扩展。
+M0–M2 中这类代码（`LabelVault`、split 哈希、git dirty 记录等）已在 M2 后的重构中移除，重构前后数值逐位一致（见 TASKS M2 记录）。
 
 ## 2. 硬性规则
 
 1. **目标域真标签只能出现在 `scarda/evaluate.py` 和 `scarda/oracle.py`（后者仅限训练域池的真标签）**。
    训练、权重估计、模型选择的代码路径不得接触 `y`。不得用目标测试 accuracy 选择 epoch、学习率、B、η 或任何超参数。
-   唯一例外：`scarda/data.py` 的数据池构建函数必须用 `y` 切池并生成 $\bar y$，之后只把 `S_tr` 真标签与 `T_eval` 交给 `LabelVault`（见 SPEC §4.4）。
+   唯一例外：`scarda/data.py` 的数据池构建函数必须用 `y` 切池并生成 $\bar y$（见 SPEC §4.4）。
 2. **不修改根目录的原始 SCARCE 文件**（`main.py`, `utils_algo.py`, `utils_data.py`, `models.py`, `cifar_models/`）。
    新代码全部放在 `scarda/`、`scripts/`、`tests/`、`configs/`。原始 `SCARCE_loss` 作为参照被测试导入。
 3. **不擅自改公式**。若认为 SPEC 中某个公式有误，停止实现该部分，写出推导与反例，交给人类确认后再改 SPEC。
 4. **检查失败时不要调参让它通过**。风险恒等式、复现测试、数据计数测试失败，一律视为 bug 或规格问题并上报。
 5. **不编造结果**。报告中的任何数字必须能在 `results/` 下找到对应文件。没跑过的实验不写成结果。
-6. **随机性可追溯**：每次运行记录 seed、split 哈希、config 哈希、git commit 与是否 dirty。
+6. **随机性可追溯**：每次运行记录 seed 与完整配置。
 7. 每个里程碑（TASKS.md 的 M0–M6）结束时**停下来汇报**，等待人类确认再进入下一个里程碑。
 
 ## 3. 汇报格式（每个里程碑结束时）
@@ -44,8 +47,5 @@ support shift / IOS 实验、CIFAR / CLCIFAR、DANN / CLARINET 等额外基线�
 ## 4. 工程约定
 
 - Python ≥ 3.10，PyTorch 2.x，依赖写入 `requirements.txt`（不沿用原 README 的 Python 3.6 / torch 1.7 版本）。
-- 配置用 YAML + dataclass，CLI 只接收 `--config` 与少量覆盖项。
-- 所有测试在 CPU 上可跑，`pytest -q` 总耗时 < 90 秒；测试不下载 MNIST（用合成数据）。
-- 提交粒度：一个子任务一个 commit，message 以里程碑编号开头，如 `M2: add oracle weights`。
 - 结果目录 `results/runs/` 不进 git；`results/summary/` 与 `results/checks/` 进 git。
 - 计算平台：本地机器用于开发与测试；DIW 耗时测量（M3）和主实验（M4）在东京大学 Wisteria/BDEC-01 上进行（SPEC §9.1）。本地测得的耗时不直接用于 Wisteria 的预算。

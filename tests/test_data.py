@@ -1,13 +1,10 @@
 """T4: data protocol (SPEC §4) on synthetic arrays (no MNIST download)."""
-import dataclasses
-
 import numpy as np
 import pytest
 import torch
 
 from scarda.config import Config, load_config
-from scarda.data import (POOLS, WEAK_POOLS, WeakSet, build_from_arrays, largest_remainder, target_prior,
-                         uniform_prior)
+from scarda.data import POOLS, WEAK_POOLS, build_from_arrays, largest_remainder, target_prior, uniform_prior
 
 K = 10
 
@@ -30,8 +27,8 @@ def _cfg(**kw):
 
 def _build(cfg, base=None):
     x_tr, y_tr, x_te, y_te = base if base is not None else _base()
-    pools, vault, rec = build_from_arrays(x_tr, y_tr, x_te, y_te, cfg)
-    return pools, vault, rec, (x_tr, y_tr, x_te, y_te)
+    pools, labels, info = build_from_arrays(x_tr, y_tr, x_te, y_te, cfg)
+    return pools, labels, info, (x_tr, y_tr, x_te, y_te)
 
 
 # ----------------------------------------------------------------------------- largest remainder
@@ -56,7 +53,7 @@ def test_largest_remainder_ties_and_float_noise():
 @pytest.mark.parametrize("rho", [1, 5, 20])
 def test_pool_counts_exact(rho):
     cfg = _cfg(rho=rho)
-    pools, vault, rec, (_, y_tr, _, y_te) = _build(cfg)
+    pools, labels, rec, (_, y_tr, _, y_te) = _build(cfg)
     pi_te = target_prior(K, rho)
     expected = {
         "S_tr": largest_remainder(cfg.n_tr, uniform_prior(K)),
@@ -66,28 +63,28 @@ def test_pool_counts_exact(rho):
     }
     for p in POOLS:
         y = y_te if p == "T_eval" else y_tr
-        actual = np.bincount(y[rec.indices[p]], minlength=K)
-        assert actual.tolist() == expected[p].tolist() == rec.target_counts[p] == rec.actual_counts[p]
+        actual = np.bincount(y[rec["indices"][p]], minlength=K)
+        assert actual.tolist() == expected[p].tolist() == rec["target_counts"][p] == rec["actual_counts"][p]
     assert [len(pools[p]) for p in WEAK_POOLS] == [cfg.n_tr, cfg.n_te, cfg.n_val]
-    assert len(vault.eval_set()[1]) == cfg.n_eval
+    assert len(labels.eval_y) == len(labels.eval_x) == cfg.n_eval
 
 
 def test_pools_pairwise_disjoint_and_rows_match():
     cfg = _cfg(n_te=400)
-    pools, vault, rec, (x_tr, y_tr, x_te, y_te) = _build(cfg)
-    sets = {p: set(rec.indices[p].tolist()) for p in WEAK_POOLS}
+    pools, labels, rec, (x_tr, y_tr, x_te, y_te) = _build(cfg)
+    sets = {p: set(rec["indices"][p].tolist()) for p in WEAK_POOLS}
     for p in WEAK_POOLS:
-        assert len(sets[p]) == len(rec.indices[p])  # no duplicates
+        assert len(sets[p]) == len(rec["indices"][p])  # no duplicates
         for q in WEAK_POOLS:
             if p < q:
                 assert not (sets[p] & sets[q]), (p, q)
-    assert len(set(rec.indices["T_eval"].tolist())) == cfg.n_eval
+    assert len(set(rec["indices"]["T_eval"].tolist())) == cfg.n_eval
     for p in WEAK_POOLS:  # x rows come from the recorded indices
-        assert torch.equal(pools[p].x.flatten(1), x_tr[torch.from_numpy(rec.indices[p])].flatten(1))
-    ex, ey = vault.eval_set()
-    assert torch.equal(ex.flatten(1), x_te[torch.from_numpy(rec.indices["T_eval"])].flatten(1))
-    assert ey.tolist() == y_te[rec.indices["T_eval"]].tolist()
-    assert vault.source_labels().tolist() == y_tr[rec.indices["S_tr"]].tolist()
+        assert torch.equal(pools[p].x.flatten(1), x_tr[torch.from_numpy(rec["indices"][p])].flatten(1))
+    ex, ey = labels.eval_x, labels.eval_y
+    assert torch.equal(ex.flatten(1), x_te[torch.from_numpy(rec["indices"]["T_eval"])].flatten(1))
+    assert ey.tolist() == y_te[rec["indices"]["T_eval"]].tolist()
+    assert labels.source_y.tolist() == y_tr[rec["indices"]["S_tr"]].tolist()
 
 
 def test_insufficient_samples_raises():
@@ -105,7 +102,7 @@ def test_ybar_never_contains_true_class(gen):
     for p in WEAK_POOLS:
         yb = pools[p].ybar.numpy()
         assert yb.dtype == np.uint8 and set(np.unique(yb)) <= {0, 1}
-        assert (yb[np.arange(len(yb)), y_tr[rec.indices[p]]] == 0).all()
+        assert (yb[np.arange(len(yb)), y_tr[rec["indices"][p]]] == 0).all()
         if gen == "single_uniform":
             assert (yb.sum(1) == 1).all()
 
@@ -115,7 +112,7 @@ def test_empirical_c_within_3_se():
     pools, _, rec, (_, y_tr, _, _) = _build(cfg)
     for p, c in (("S_tr", cfg.c_tr), ("T_tr", cfg.c_te), ("T_val", cfg.c_te)):
         yb = pools[p].ybar.numpy().astype(bool)
-        y = y_tr[rec.indices[p]]
+        y = y_tr[rec["indices"][p]]
         offtrue = np.ones_like(yb)
         offtrue[np.arange(len(y)), y] = False
         n_pairs = offtrue.sum()
@@ -130,29 +127,23 @@ def test_t_tr_nested_and_other_pools_invariant():
     big = _build(_cfg(n_te=400))
     ps, _, rs, _ = small
     pb, _, rb, _ = big
-    pos = {int(i): j for j, i in enumerate(rb.indices["T_tr"])}
-    rows = np.array([pos[int(i)] for i in rs.indices["T_tr"]])  # raises KeyError if not nested
+    pos = {int(i): j for j, i in enumerate(rb["indices"]["T_tr"])}
+    rows = np.array([pos[int(i)] for i in rs["indices"]["T_tr"]])  # raises KeyError if not nested
     assert torch.equal(ps["T_tr"].ybar, pb["T_tr"].ybar[torch.from_numpy(rows)])
-    for key in ("S_tr/idx", "S_tr/ybar", "T_val/idx", "T_val/ybar", "T_eval/idx"):
-        assert rs.hashes[key] == rb.hashes[key], key
-    # n_te = n_te_max is the parent itself
-    assert rb.hashes["T_tr/idx"] != rs.hashes["T_tr/idx"]
+    for p in ("S_tr", "T_val", "T_eval"):
+        assert np.array_equal(rs["indices"][p], rb["indices"][p]), p
+    for p in ("S_tr", "T_val"):
+        assert torch.equal(ps[p].ybar, pb[p].ybar), p
 
 
-def test_same_seed_same_hash_different_seed_differs():
-    a = _build(_cfg(seed=3))[2]
-    b = _build(_cfg(seed=3))[2]
-    c = _build(_cfg(seed=4))[2]
-    assert a.hashes == b.hashes and a.split_hash == b.split_hash
-    assert a.split_hash != c.split_hash
-    assert set(a.hashes) == {f"{p}/idx" for p in POOLS} | {f"{p}/ybar" for p in WEAK_POOLS}
-
-
-# ----------------------------------------------------------------------------- isolation shape
-def test_weakset_carries_no_labels_or_indices():
-    assert {f.name for f in dataclasses.fields(WeakSet)} == {"name", "x", "ybar"}
-    pools, vault, _, _ = _build(_cfg())
-    assert not hasattr(vault, "__dict__")  # slots only, no ad-hoc attributes
+def test_same_seed_same_pools_different_seed_differs():
+    a, b, c = (_build(_cfg(seed=s)) for s in (3, 3, 4))
+    for p in POOLS:
+        assert np.array_equal(a[2]["indices"][p], b[2]["indices"][p]), p
+    for p in WEAK_POOLS:
+        assert torch.equal(a[0][p].ybar, b[0][p].ybar), p
+    assert not np.array_equal(a[2]["indices"]["S_tr"], c[2]["indices"]["S_tr"])
+    assert not torch.equal(a[0]["S_tr"].ybar, c[0]["S_tr"].ybar)
 
 
 def test_config_overrides_and_validation(tmp_path):

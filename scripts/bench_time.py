@@ -20,9 +20,9 @@ if str(ROOT) not in sys.path:
 from scarda.config import load_config  # noqa: E402
 from scarda.data import build_mnist  # noqa: E402
 from scarda.evaluate import make_evaluator  # noqa: E402
-from scarda.io_utils import device_info, env_info  # noqa: E402
-from scarda.oracle import oracle_weights_from_vault  # noqa: E402
-from scarda.train import resolve_device, train  # noqa: E402
+from scarda.io_utils import run_info  # noqa: E402
+from scarda.oracle import source_oracle_weights  # noqa: E402
+from scarda.train import fit, resolve_device  # noqa: E402
 
 
 def main(argv=None) -> int:
@@ -33,14 +33,14 @@ def main(argv=None) -> int:
     args = ap.parse_args(argv)
     cfg = load_config(args.config, args.overrides)
     device = resolve_device(cfg.device)
-    print({**env_info(), **device_info(device)})
+    print(run_info(device))
 
     t0 = time.perf_counter()
-    pools, vault, _ = build_mnist(cfg)
+    pools, labels, _ = build_mnist(cfg)
     t_data = time.perf_counter() - t0
-    evaluator = make_evaluator(vault, cfg.K, device)
-    sw = oracle_weights_from_vault(vault, pools["S_tr"], cfg) if cfg.method == "oracle_iw" else None
-    hist = train(cfg, pools, evaluator, epochs=args.epochs, source_weights=sw)
+    evaluator = make_evaluator(labels.eval_x, labels.eval_y, cfg.K, device)
+    sw = source_oracle_weights(labels.source_y, pools["S_tr"].ybar, cfg) if cfg.method == "oracle_iw" else None
+    _, hist = fit(cfg, pools, evaluator, epochs=args.epochs, source_weights=sw)
     times = [r["epoch_time"] for r in hist]
     rest = times[1:] or times
     print(f"method={cfg.method} steps/epoch={hist[0]['step']} data_build={t_data:.2f}s")

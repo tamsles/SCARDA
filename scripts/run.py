@@ -15,13 +15,12 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from scarda.config import config_hash, load_config  # noqa: E402
+from scarda.config import load_config  # noqa: E402
 from scarda.data import build_mnist, format_pool_report  # noqa: E402
 from scarda.evaluate import make_evaluator  # noqa: E402
-from scarda.io_utils import (MetricsWriter, device_info, env_info, git_info, now_iso, run_dir,  # noqa: E402
-                             write_config, write_json)
-from scarda.oracle import oracle_weights_from_vault  # noqa: E402
-from scarda.train import METRIC_COLUMNS, final_metrics, resolve_device, train  # noqa: E402
+from scarda.io_utils import MetricsWriter, now_iso, run_dir, run_info, write_config, write_json  # noqa: E402
+from scarda.oracle import source_oracle_weights  # noqa: E402
+from scarda.train import METRIC_COLUMNS, final_metrics, fit, resolve_device  # noqa: E402
 
 
 def main(argv=None) -> int:
@@ -38,25 +37,17 @@ def main(argv=None) -> int:
     out.mkdir(parents=True, exist_ok=True)
     device = resolve_device(cfg.device)
 
-    pools, vault, record = build_mnist(cfg)
-    print(format_pool_report(record))
-    print(f"split_hash={record.split_hash}")
+    pools, labels, info = build_mnist(cfg)
+    print(format_pool_report(info))
 
     write_config(out, cfg)
-    meta = {
-        **git_info(), **env_info(), **device_info(device),
-        "config_hash": config_hash(cfg),
-        "split_hash": record.split_hash,
-        "split_hashes": record.hashes,
-        "base_hash": record.base_hash,
-        "pools": {k: v for k, v in record.summary().items() if k not in ("hashes", "split_hash", "base_hash")},
-        "start_time": now_iso(),
-    }
+    meta = {"seed": cfg.seed, **run_info(device),
+            "pools": {k: v for k, v in info.items() if k != "indices"}, "start_time": now_iso()}
     write_json(out / "meta.json", meta)
 
-    evaluator = make_evaluator(vault, cfg.K, device)
-    # oracle_iw: weights come from S_tr true labels via oracle.py; train() never sees the vault
-    source_weights = oracle_weights_from_vault(vault, pools["S_tr"], cfg) if cfg.method == "oracle_iw" else None
+    evaluator = make_evaluator(labels.eval_x, labels.eval_y, cfg.K, device)
+    source_weights = (source_oracle_weights(labels.source_y, pools["S_tr"].ybar, cfg)
+                      if cfg.method == "oracle_iw" else None)
     writer = MetricsWriter(out / "metrics.csv", METRIC_COLUMNS)
 
     def on_epoch(row):
@@ -66,7 +57,7 @@ def main(argv=None) -> int:
               f"t {row['epoch_time']:.2f}s", flush=True)
 
     t0 = time.perf_counter()
-    history = train(cfg, pools, evaluator, on_epoch=on_epoch, source_weights=source_weights)
+    _, history = fit(cfg, pools, evaluator, on_epoch=on_epoch, source_weights=source_weights)
     meta.update({"end_time": now_iso(), "elapsed_sec": time.perf_counter() - t0})
     write_json(out / "meta.json", meta)
     final = final_metrics(history)

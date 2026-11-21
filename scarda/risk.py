@@ -40,11 +40,6 @@ def logistic_ell(z: torch.Tensor) -> torch.Tensor:
     return F.softplus(-z)
 
 
-def batch_pibar(ybar: torch.Tensor) -> torch.Tensor:
-    """Empirical complementary-label rate per class: column mean of ybar."""
-    return (ybar if ybar.is_floating_point() else ybar.float()).mean(dim=0)
-
-
 def apply_correction(P: torch.Tensor, correction: Correction) -> torch.Tensor:
     if correction == "abs":
         return P.abs()

@@ -1,7 +1,6 @@
 """Oracle importance weights under class-prior shift (SPEC §5).
 
-Privileged module: besides evaluate.py, the only code allowed to read true labels, and only the
-S_tr labels (``LabelVault.source_labels``).
+Besides evaluate.py, the only code that reads true labels, and only the S_tr labels.
 
 With p(x|y) shared across domains and SCAR with a class-independent c_d in each domain,
 
@@ -24,7 +23,7 @@ from __future__ import annotations
 import numpy as np
 import torch
 
-from scarda.data import LabelVault, WeakSet, gen_ybar, target_prior, uniform_prior
+from scarda.data import gen_ybar, target_prior, uniform_prior
 
 
 def group_weight_tables(pi_tr, pi_te, c_tr: float, c_te: float) -> tuple[np.ndarray, np.ndarray]:
@@ -65,16 +64,13 @@ def oracle_weights(y, ybar, pi_tr, pi_te, c_tr: float, c_te: float,
     return (Wp * mask).to(dtype), (Wn * (1.0 - mask)).to(dtype)
 
 
-def oracle_weights_from_vault(vault: LabelVault, s_tr: WeakSet, cfg) -> tuple[torch.Tensor, torch.Tensor]:
+def source_oracle_weights(source_y, source_ybar, cfg) -> tuple[torch.Tensor, torch.Tensor]:
     """Oracle weights for the S_tr pool of a run (population pi_tr, pi_te, c_tr, c_te)."""
-    if s_tr.name != "S_tr":
-        raise ValueError("oracle weights are defined for the S_tr pool only")
     c_tr, c_te = cfg.effective_c
-    return oracle_weights(vault.source_labels(), s_tr.ybar, uniform_prior(cfg.K), target_prior(cfg.K, cfg.rho),
-                          c_tr, c_te)
+    return oracle_weights(source_y, source_ybar, uniform_prior(cfg.K), target_prior(cfg.K, cfg.rho), c_tr, c_te)
 
 
-def fresh_source_pool(vault: LabelVault, s_tr: WeakSet, cfg, rng: np.random.Generator
+def fresh_source_ybar(source_y, cfg, rng: np.random.Generator
                       ) -> tuple[torch.Tensor, tuple[torch.Tensor, torch.Tensor]]:
     """Independent redraw of the S_tr complementary labels, with matching oracle weights.
 
@@ -84,12 +80,6 @@ def fresh_source_pool(vault: LabelVault, s_tr: WeakSet, cfg, rng: np.random.Gene
     the caller must derive independently of the training label stream.
     Returns (ybar uint8 [n,K], (w_pos, w_neg)).
     """
-    if s_tr.name != "S_tr":
-        raise ValueError("the fresh redraw is defined for the S_tr pool only")
-    y = vault.source_labels()
-    if len(y) != len(s_tr):
-        raise ValueError("vault source labels and S_tr pool have different lengths")
-    c_tr, c_te = cfg.effective_c
-    ybar = torch.from_numpy(gen_ybar(y.numpy(), cfg.K, cfg.gen, c_tr, rng))
-    weights = oracle_weights(y, ybar, uniform_prior(cfg.K), target_prior(cfg.K, cfg.rho), c_tr, c_te)
-    return ybar, weights
+    y = torch.as_tensor(source_y)
+    ybar = torch.from_numpy(gen_ybar(y.numpy(), cfg.K, cfg.gen, cfg.effective_c[0], rng))
+    return ybar, source_oracle_weights(y, ybar, cfg)
