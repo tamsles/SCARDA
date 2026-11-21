@@ -27,7 +27,7 @@
 
 1. `scarda/data.py`：按 SPEC §4 构造四个池、偏移先验、互补标签、`WeakSet` / `LabelVault`、split 哈希。〔重构注：`LabelVault` 已改为具名元组 `Labels`，split 哈希已移除〕
 2. `scarda/models.py`、`scarda/train.py`（先只支持 `source_only`、`target_only`）、`scarda/evaluate.py`、`scarda/io_utils.py`、`scripts/run.py`。
-3. `tests/test_data.py`（**T4**）：各池类计数精确等于目标计数；池两两不相交；$\bar y$ 从不包含真类；经验 $c$ 与设定值的偏差在 3 个标准误内（按池合并估计：$\hat c$ = 该池所有 $k\neq y$ 的 $(i,k)$ 对上 $\bar y_{ik}$ 的均值，$N$ = 这类对的个数，$\mathrm{SE}=\sqrt{c(1-c)/N}$；不逐类检验）；同 seed 两次生成哈希一致。〔重构注：已改为直接比较各池索引与 $ar y$ 数组〕
+3. `tests/test_data.py`（**T4**）：各池类计数精确等于目标计数；池两两不相交；$\bar y$ 从不包含真类；经验 $c$ 与设定值的偏差在 3 个标准误内（按池合并估计：$\hat c$ = 该池所有 $k\neq y$ 的 $(i,k)$ 对上 $\bar y_{ik}$ 的均值，$N$ = 这类对的个数，$\mathrm{SE}=\sqrt{c(1-c)/N}$；不逐类检验）；同 seed 两次生成哈希一致。〔重构注：已改为直接比较各池索引与 $\bar y$ 数组〕
 4. `scripts/bench_time.py`：测 `source_only` 每 epoch 耗时（以及 GPU/CPU 信息）。
 5. 在真实 MNIST 上跑 `source_only`，$\rho=20$，seed 0，完整 epoch 数。
 

@@ -182,7 +182,7 @@ $\pi_{\mathrm{te}}$ 在 v1 中**使用已知真值**（来自配置），报告�
 
 M1 确认的补充约定：
 
-- `meta.json` 另记录 git commit（只为把结果对应到代码版本）与 GPU 型号；不记录 split 哈希、dirty 标志等。
+- `meta.json` 另记录 git commit（只为把结果对应到代码版本）、GPU 型号与 CUDA 版本；不记录 split 哈希、dirty 标志等。
 - 运行目录名末尾的 8 位配置哈希用于区分不同配置（如 M3 的 $B$）并支持跳过已完成的 run。
 - `metrics.csv`：`neg_rate, empty_pos, empty_neg` 为该 epoch 内各 step 的平均值；无权重方法的 `ess_pos_mean, ess_neg_mean, w_max, fallback, kmm_iters_mean` 写 `nan`；`epoch_time` 包含 `T_val` 弱标签风险与 `T_eval` 评估。
 - 配置哈希不包含 `device, data_root, out_root`（不影响结果的字段）。

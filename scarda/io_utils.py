@@ -36,6 +36,7 @@ def run_info(device: torch.device) -> dict:
             "device": str(device)}
     if device.type == "cuda":
         info["gpu"] = torch.cuda.get_device_name(device)
+        info["cuda"] = torch.version.cuda
     return info
 
 
