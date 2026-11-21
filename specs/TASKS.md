@@ -10,7 +10,7 @@
 2. 在新环境下运行原始 `main.py` 的缩短版（`-ep 2 -run_times 1`），确认原代码可跑。
 3. 实现 `scarda/risk.py::scar_ovr_risk`（SPEC §3.1–3.2）。
 4. `tests/test_risk.py`：
-   - **T1 复现**：单热 $\bar y$、均匀 $\pi$、`pibar_mode=batch`、无权重、`abs` → 与根目录 `utils_algo.SCARCE_loss` 相差 < 1e-6（多组随机 logits，含某类空组的情形）。
+   - **T1 复现**：单热 $\bar y$、均匀 $\pi$、`pibar_mode=batch`、无权重、`abs` → 与根目录 `utils_algo.SCARCE_loss` 相差：float64 下绝对误差 < 1e-6；另加 float32 用例，相对误差 < 1e-5（多组随机 logits，含某类空组的情形）。
    - **T2 单位权重**：`w_pos=w_neg=1` 与 `None` 结果相同。
    - **T3 修正分支**：构造 $\hat P_k<0$ 的输入，`abs`/`relu`/`none` 三种结果符合定义，`neg_rate` 正确。
 

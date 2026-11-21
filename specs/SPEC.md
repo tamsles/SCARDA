@@ -39,16 +39,18 @@ $$R_{\mathrm{te},k}=\underbrace{(1-\pi_{\mathrm{te},k})\,\mathbb E_{p_{\mathrm{t
 ### 3.1 统一的经验风险函数
 
 ```
-scar_ovr_risk(logits[n,K], ybar[n,K], pi[K], pibar[K],
+scar_ovr_risk(logits[n,K], ybar[n,K], pi[K], pibar[K] | None,
               w_pos[n,K] | None, w_neg[n,K] | None,
-              correction in {"abs","relu","none"}) -> RiskOut
+              correction in {"abs","relu","none"},
+              pibar_mode in {"batch","fixed"}) -> RiskOut
 ```
 
-- 组内（自归一化）加权均值：$M^{+}_k(g)=\dfrac{\sum_{i:\bar y_{ik}=1} w^{+}_{ik}g_{ik}}{\sum_{i:\bar y_{ik}=1} w^{+}_{ik}}$，$M^{-}_k$ 同理用 $\bar y_{ik}=0$ 和 $w^-$。`None` 视为全 1。空组 → 该均值取 0 并计数（与 SCARCE L22–23 一致）。
+- `pibar_mode=batch`：`pibar` 必须为 `None`（由 batch 列均值计算），且 `w_pos`、`w_neg` 必须为 `None`，否则报错。`pibar_mode=fixed`：`pibar` 必须传入。
+- 组内（自归一化）加权均值：$M^{+}_k(g)=\dfrac{\sum_{i:\bar y_{ik}=1} w^{+}_{ik}g_{ik}}{\sum_{i:\bar y_{ik}=1} w^{+}_{ik}}$，$M^{-}_k$ 同理用 $\bar y_{ik}=0$ 和 $w^-$。`None` 视为全 1。空组 → 该均值取 0 并计数（与 SCARCE L22–23 一致）。**组内权重和为 0 的非空组同样视为空组**（均值取 0 并计数）。
 - $\hat N_k=(1-\pi_k)M^+_k(\ell(-f_k))$
 - $\hat P_k=(\bar\pi_k+\pi_k-1)M^+_k(\ell(f_k))+(1-\bar\pi_k)M^-_k(\ell(f_k))$
 - $\hat R=\sum_k\big[\hat N_k+\mathrm{corr}(\hat P_k)\big]$，`abs`→$|\cdot|$，`relu`→$\max(0,\cdot)$，`none`→恒等。
-- `RiskOut` 返回：`total`, `N[K]`, `P_raw[K]`, `neg_rate`（$\hat P_k<0$ 的比例）, `empty_groups`。
+- `RiskOut` 返回：`total`, `N[K]`, `P_raw[K]`, `neg_rate`（本次调用中 $K$ 个类里 $\hat P_k<0$（严格）的比例）, `empty_pos`（空的 $(k,+)$ 组数）, `empty_neg`（空的 $(k,-)$ 组数）。
 - 自归一化使估计量为比值估计，有限样本有偏；报告中必须如此描述。
 
 ### 3.2 $\bar\pi$ 的取值模式
@@ -147,7 +149,7 @@ $\pi_{\mathrm{te}}$ 在 v1 中**使用已知真值**（来自配置），报告�
 
 - `config.yaml`：完整解析后的配置
 - `meta.json`：git commit、dirty 标志、python/torch 版本、device、split 哈希、开始/结束时间、耗时
-- `metrics.csv`：每 epoch 一行：`epoch, step, train_loss_mean, val_weak_risk, target_acc, target_bal_acc, neg_rate, empty_groups, ess_pos_mean, ess_neg_mean, w_max, fallback, kmm_iters_mean, epoch_time`
+- `metrics.csv`：每 epoch 一行：`epoch, step, train_loss_mean, val_weak_risk, target_acc, target_bal_acc, neg_rate, empty_pos, empty_neg, ess_pos_mean, ess_neg_mean, w_max, fallback, kmm_iters_mean, epoch_time`
 - `final.json`：`acc_last10, acc_last, bal_acc_last10, bal_acc_last`
 
 ESS 比例定义为 $(\sum w)^2/(m\sum w^2)$，按组计算后对 $(k,s)$ 取平均。`final.json` 存在时跳过该 run（支持断点续跑）。
