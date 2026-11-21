@@ -1,0 +1,135 @@
+{
+  "description": "Risk identity check (TASKS M2.4): (a) true-label target OVR risk on T_eval; (b) target weak SCAR risk on T_val (pi_te, pibar=T_val freq); (c) oracle-weighted source risk on S_tr (pi_te, pibar=T_tr freq); control = unweighted source risk (pi_tr). correction=none. SE: nonparametric bootstrap per pool; diff SE = sqrt(SE_u^2+SE_v^2).",
+  "config": {
+    "rho": 20.0,
+    "n_te": 2000,
+    "seed": 0,
+    "gen": "bernoulli",
+    "c_tr": 0.3,
+    "c_te": 0.2,
+    "config_hash": "9bb48ece3714ab6a850addb41a82f2afd0193b03e4ce63409a99fb576e158d0f"
+  },
+  "bootstrap": {
+    "B": 2000,
+    "seed": "SeedSequence([0, 100])"
+  },
+  "split_hash": "da3a9ea6a480258721e5cdc136d0da2fe91d3520c3efefda75920f0e4f2485a0",
+  "git_commit": "a9c674cae711272ec067ae315bcc9d7f7e6058f7",
+  "git_dirty": false,
+  "git_dirty_files": [],
+  "python": "3.10.11",
+  "torch": "2.5.1+cu124",
+  "platform": "Windows-10-10.0.19045-SP0",
+  "device": "cuda",
+  "cpu": "Intel64 Family 6 Model 165 Stepping 2, GenuineIntel",
+  "gpu": "NVIDIA GeForce RTX 3070 Laptop GPU",
+  "cuda": "12.4",
+  "time": "2026-11-21T17:08:37+09:00",
+  "classifiers": {
+    "random_init": {
+      "risks": {
+        "a": {
+          "value": 6.967441213059629,
+          "se": 0.0014743681240146581
+        },
+        "b": {
+          "value": 6.955841674213193,
+          "se": 0.007478919733355152
+        },
+        "c": {
+          "value": 6.964585401823674,
+          "se": 0.0025342305251876106
+        },
+        "control": {
+          "value": 6.9713456478210345,
+          "se": 0.001792288144974067
+        }
+      },
+      "diffs": {
+        "a-b": {
+          "diff": 0.011599538846435387,
+          "se": 0.007622860469868225,
+          "z": 1.521677970138145,
+          "within_3se": true
+        },
+        "a-c": {
+          "diff": 0.002855811235954242,
+          "se": 0.0029319082045492443,
+          "z": 0.9740452417722603,
+          "within_3se": true
+        },
+        "b-c": {
+          "diff": -0.008743727610481145,
+          "se": 0.007896617296840576,
+          "z": -1.1072750877745456,
+          "within_3se": true
+        },
+        "a-control": {
+          "diff": -0.003904434761405895,
+          "se": 0.0023207882625791362,
+          "z": -1.6823744002681322,
+          "within_3se": true
+        }
+      },
+      "n": {
+        "T_eval": 3000,
+        "T_val": 2000,
+        "S_tr": 20000,
+        "T_tr": 2000
+      }
+    },
+    "source_only_1epoch": {
+      "risks": {
+        "a": {
+          "value": 1.4498579216316485,
+          "se": 0.01587387291043786
+        },
+        "b": {
+          "value": 1.4285361159277976,
+          "se": 0.17078561902754036
+        },
+        "c": {
+          "value": 1.2857557943418145,
+          "se": 0.06182641363279848
+        },
+        "control": {
+          "value": 1.516338982881559,
+          "se": 0.040381777885529185
+        }
+      },
+      "diffs": {
+        "a-b": {
+          "diff": 0.021321805703850893,
+          "se": 0.17152174062723619,
+          "z": 0.12430963926718204,
+          "within_3se": true
+        },
+        "a-c": {
+          "diff": 0.16410212728983398,
+          "se": 0.06383169482216983,
+          "z": 2.570856496087247,
+          "within_3se": true
+        },
+        "b-c": {
+          "diff": 0.14278032158598308,
+          "se": 0.18163213671956305,
+          "z": 0.7860961400593635,
+          "within_3se": true
+        },
+        "a-control": {
+          "diff": -0.06648106124991049,
+          "se": 0.04338972028456679,
+          "z": -1.5321846007280442,
+          "within_3se": true
+        }
+      },
+      "n": {
+        "T_eval": 3000,
+        "T_val": 2000,
+        "S_tr": 20000,
+        "T_tr": 2000
+      }
+    }
+  },
+  "source_only_1epoch_train_loss": 2.6576463255701186
+}
