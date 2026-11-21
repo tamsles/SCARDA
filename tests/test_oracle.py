@@ -6,7 +6,7 @@ import torch
 import _synth as S
 from scarda.config import Config
 from scarda.data import build_from_arrays, gen_ybar, target_prior, uniform_prior
-from scarda.oracle import group_weight_tables, oracle_weights, oracle_weights_from_vault
+from scarda.oracle import fresh_source_pool, group_weight_tables, oracle_weights, oracle_weights_from_vault
 from scarda.train import fit, method_setup
 
 
@@ -111,6 +111,28 @@ def test_oracle_iw_trains_and_logs_weight_diagnostics():
         assert 0 < r["ess_pos_mean"] <= 1 and 0 < r["ess_neg_mean"] <= 1
         assert r["w_max"] >= 1
         assert np.isnan(r["fallback"]) and np.isnan(r["kmm_iters_mean"])
+
+
+def test_fresh_source_pool_is_an_independent_scar_redraw():
+    cfg, pools, vault = _tiny_pools("oracle_iw")
+    S, y = pools["S_tr"], vault.source_labels()
+    ybar, (wp, wn) = fresh_source_pool(vault, S, cfg, np.random.default_rng(np.random.SeedSequence([0, 101])))
+    assert ybar.shape == S.ybar.shape and ybar.dtype == torch.uint8
+    assert not bool(ybar[torch.arange(len(y)), y].any())  # never the true class
+    assert not torch.equal(ybar, S.ybar)
+    off = ~torch.nn.functional.one_hot(y.long(), cfg.K).bool()
+    N, c = int(off.sum()), cfg.effective_c[0]
+    assert abs(float(ybar[off].double().mean()) - c) <= 3 * np.sqrt(c * (1 - c) / N)
+    # agreement with the training labels on k != y pairs is what independence predicts (c^2 + (1-c)^2)
+    agree = float((ybar[off] == S.ybar[off]).double().mean())
+    p = c ** 2 + (1 - c) ** 2
+    assert abs(agree - p) <= 3 * np.sqrt(p * (1 - p) / N)
+    ref = oracle_weights(y, ybar, uniform_prior(cfg.K), target_prior(cfg.K, cfg.rho), *cfg.effective_c)
+    assert torch.equal(wp, ref[0]) and torch.equal(wn, ref[1])
+    ybar2, _ = fresh_source_pool(vault, S, cfg, np.random.default_rng(np.random.SeedSequence([0, 101])))
+    assert torch.equal(ybar, ybar2)
+    with pytest.raises(ValueError):
+        fresh_source_pool(vault, pools["T_tr"], cfg, np.random.default_rng(0))
 
 
 def test_source_weights_only_for_oracle_iw():

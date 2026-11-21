@@ -24,7 +24,7 @@ from __future__ import annotations
 import numpy as np
 import torch
 
-from scarda.data import LabelVault, WeakSet, target_prior, uniform_prior
+from scarda.data import LabelVault, WeakSet, gen_ybar, target_prior, uniform_prior
 
 
 def group_weight_tables(pi_tr, pi_te, c_tr: float, c_te: float) -> tuple[np.ndarray, np.ndarray]:
@@ -72,3 +72,24 @@ def oracle_weights_from_vault(vault: LabelVault, s_tr: WeakSet, cfg) -> tuple[to
     c_tr, c_te = cfg.effective_c
     return oracle_weights(vault.source_labels(), s_tr.ybar, uniform_prior(cfg.K), target_prior(cfg.K, cfg.rho),
                           c_tr, c_te)
+
+
+def fresh_source_pool(vault: LabelVault, s_tr: WeakSet, cfg, rng: np.random.Generator
+                      ) -> tuple[torch.Tensor, tuple[torch.Tensor, torch.Tensor]]:
+    """Independent redraw of the S_tr complementary labels, with matching oracle weights.
+
+    For the risk-identity check only (scripts/check_identity.py), never for training: a classifier
+    trained on S_tr.ybar is not independent of S_tr.ybar, so its weak risk on those labels is biased
+    low. The redraw keeps x and y of S_tr, uses the same generator (cfg.gen, c_tr) and `rng`, which
+    the caller must derive independently of the training label stream.
+    Returns (ybar uint8 [n,K], (w_pos, w_neg)).
+    """
+    if s_tr.name != "S_tr":
+        raise ValueError("the fresh redraw is defined for the S_tr pool only")
+    y = vault.source_labels()
+    if len(y) != len(s_tr):
+        raise ValueError("vault source labels and S_tr pool have different lengths")
+    c_tr, c_te = cfg.effective_c
+    ybar = torch.from_numpy(gen_ybar(y.numpy(), cfg.K, cfg.gen, c_tr, rng))
+    weights = oracle_weights(y, ybar, uniform_prior(cfg.K), target_prior(cfg.K, cfg.rho), c_tr, c_te)
+    return ybar, weights

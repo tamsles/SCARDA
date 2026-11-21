@@ -10,6 +10,12 @@ For two fixed classifiers -- (1) the random initialization used by train() (torc
   (c) oracle-weighted source risk on S_tr:     pi_te, pibar = T_tr frequency, oracle weights (SPEC §5)
   control: unweighted source risk on S_tr:     pi_tr, pibar = S_tr frequency (expected to differ)
 
+(c) and control are evaluated on an independent redraw of the S_tr complementary labels
+(oracle.fresh_source_pool, generator SeedSequence([seed, 101])), not on S_tr.ybar: classifier (2) is
+trained on S_tr.ybar, so its weak risk on those labels is biased low (the identity needs a classifier
+independent of the evaluation labels). The values on the training labels are kept as a diagnostic
+("in_sample_training_ybar"), without standard errors.
+
 Standard errors: nonparametric bootstrap (B resamples with replacement of the rows of each pool;
 (c) resamples S_tr and T_tr jointly so the pibar estimate is included). The pools are disjoint and
 independently labeled, so the SE of a difference is sqrt(SE_u^2 + SE_v^2). The bootstrap ignores the
@@ -36,11 +42,12 @@ from scarda.data import build_mnist, target_prior, uniform_prior  # noqa: E402
 from scarda.evaluate import make_evaluator, true_ovr_losses  # noqa: E402
 from scarda.io_utils import device_info, env_info, git_info, now_iso  # noqa: E402
 from scarda.models import MLP  # noqa: E402
-from scarda.oracle import oracle_weights_from_vault  # noqa: E402
+from scarda.oracle import fresh_source_pool, oracle_weights_from_vault  # noqa: E402
 from scarda.risk import scar_ovr_risk  # noqa: E402
 from scarda.train import fit, resolve_device  # noqa: E402
 
 BOOT_SEED_TAG = 100  # bootstrap generator: SeedSequence([seed, 100]); not used anywhere else
+FRESH_YBAR_SEED_TAG = 101  # S_tr ybar redraw: SeedSequence([seed, 101]); not used anywhere else
 
 
 def weak_risk_counts(lf, lmf, Yp, Ap, An, pi, pibar, C):
@@ -67,7 +74,10 @@ def logits_of(model, x, device, bs=4096):
     return torch.cat([model(x[i:i + bs].to(device)) for i in range(0, len(x), bs)]).double().cpu()
 
 
-def evaluate_classifier(model, pools, vault, weights, cfg, device, B, rng, chunk=100):
+def evaluate_classifier(model, pools, vault, eval_ybar_S, weights, train_ybar_S, train_weights, cfg, device, B,
+                        rng, chunk=100):
+    """(c) and control use `eval_ybar_S` / `weights` (the independent redraw); `train_ybar_S` /
+    `train_weights` (S_tr.ybar) only give the in-sample diagnostic point values."""
     pi_te, pi_tr = target_prior(cfg.K, cfg.rho), uniform_prior(cfg.K)
     S, Tt, V = pools["S_tr"], pools["T_tr"], pools["T_val"]
     fS, fV = logits_of(model, S.x, device), logits_of(model, V.x, device)
@@ -80,8 +90,8 @@ def evaluate_classifier(model, pools, vault, weights, cfg, device, B, rng, chunk
         sp = torch.nn.functional.softplus
         return sp(-f).numpy(), sp(f).numpy(), Yp, Ap, An
 
-    lfS, lmfS, YS, ApS, AnS = parts(fS, S.ybar, *weights)
-    _, _, _, ApS0, AnS0 = parts(fS, S.ybar)
+    lfS, lmfS, YS, ApS, AnS = parts(fS, eval_ybar_S, *weights)
+    _, _, _, ApS0, AnS0 = parts(fS, eval_ybar_S)
     lfV, lmfV, YV, ApV, AnV = parts(fV, V.ybar)
     YT = Tt.ybar.double().numpy()
 
@@ -96,14 +106,23 @@ def evaluate_classifier(model, pools, vault, weights, cfg, device, B, rng, chunk
     ref = {
         "b": scar_ovr_risk(fV, V.ybar, torch.as_tensor(pi_te), pibar=torch.as_tensor(pibar_V),
                            correction="none", pibar_mode="fixed").total.item(),
-        "c": scar_ovr_risk(fS, S.ybar, torch.as_tensor(pi_te), pibar=torch.as_tensor(pibar_T),
+        "c": scar_ovr_risk(fS, eval_ybar_S, torch.as_tensor(pi_te), pibar=torch.as_tensor(pibar_T),
                            w_pos=weights[0].double(), w_neg=weights[1].double(),
                            correction="none", pibar_mode="fixed").total.item(),
-        "control": scar_ovr_risk(fS, S.ybar, torch.as_tensor(pi_tr), correction="none",
+        "control": scar_ovr_risk(fS, eval_ybar_S, torch.as_tensor(pi_tr), correction="none",
                                  pibar_mode="batch").total.item(),
     }
     for k, v in ref.items():
         assert abs(pt[k] - v) < 1e-9, (k, pt[k], v)
+
+    # diagnostic only: the same quantities on the labels the classifier may have been trained on
+    in_sample = {
+        "c": scar_ovr_risk(fS, train_ybar_S, torch.as_tensor(pi_te), pibar=torch.as_tensor(pibar_T),
+                           w_pos=train_weights[0].double(), w_neg=train_weights[1].double(),
+                           correction="none", pibar_mode="fixed").total.item(),
+        "control": scar_ovr_risk(fS, train_ybar_S, torch.as_tensor(pi_tr), correction="none",
+                                 pibar_mode="batch").total.item(),
+    }
 
     boots = {k: [] for k in pt}
     for start in range(0, B, chunk):
@@ -121,7 +140,7 @@ def evaluate_classifier(model, pools, vault, weights, cfg, device, B, rng, chunk
     for u, v in (("a", "b"), ("a", "c"), ("b", "c"), ("a", "control")):
         d, s = pt[u] - pt[v], float(np.hypot(se[u], se[v]))
         diffs[f"{u}-{v}"] = {"diff": d, "se": s, "z": d / s, "within_3se": bool(abs(d) <= 3 * s)}
-    return {"risks": risks, "diffs": diffs, "n": {"T_eval": len(a_loss), "T_val": len(YV), "S_tr": len(YS),
+    return {"risks": risks, "diffs": diffs, "in_sample_training_ybar": in_sample, "n": {"T_eval": len(a_loss), "T_val": len(YV), "S_tr": len(YS),
                                                   "T_tr": len(YT)}}
 
 
@@ -136,7 +155,9 @@ def main(argv=None) -> int:
     device = resolve_device(cfg.device)
 
     pools, vault, record = build_mnist(cfg)
-    weights = oracle_weights_from_vault(vault, pools["S_tr"], cfg)
+    train_weights = oracle_weights_from_vault(vault, pools["S_tr"], cfg)
+    eval_ybar_S, weights = fresh_source_pool(
+        vault, pools["S_tr"], cfg, np.random.default_rng(np.random.SeedSequence([cfg.seed, FRESH_YBAR_SEED_TAG])))
     rng = np.random.default_rng(np.random.SeedSequence([cfg.seed, BOOT_SEED_TAG]))
 
     torch.manual_seed(cfg.seed)  # identical to the initialization in train.fit
@@ -150,7 +171,10 @@ def main(argv=None) -> int:
                        "(b) target weak SCAR risk on T_val (pi_te, pibar=T_val freq); "
                        "(c) oracle-weighted source risk on S_tr (pi_te, pibar=T_tr freq); "
                        "control = unweighted source risk (pi_tr). correction=none. "
+                       "(c) and control use an independent redraw of the S_tr complementary labels "
+                       "(not the training labels); in_sample_training_ybar = same on S_tr.ybar, diagnostic only. "
                        "SE: nonparametric bootstrap per pool; diff SE = sqrt(SE_u^2+SE_v^2).",
+        "fresh_ybar_seed": f"SeedSequence([{cfg.seed}, {FRESH_YBAR_SEED_TAG}])",
         "config": {"rho": cfg.rho, "n_te": cfg.n_te, "seed": cfg.seed, "gen": cfg.gen,
                    "c_tr": cfg.effective_c[0], "c_te": cfg.effective_c[1], "config_hash": config_hash(cfg)},
         "bootstrap": {"B": args.boot, "seed": f"SeedSequence([{cfg.seed}, {BOOT_SEED_TAG}])"},
@@ -159,11 +183,14 @@ def main(argv=None) -> int:
         "classifiers": {},
     }
     for name, model in (("random_init", init_model), ("source_only_1epoch", trained)):
-        res = evaluate_classifier(model, pools, vault, weights, cfg, device, args.boot, rng)
+        res = evaluate_classifier(model, pools, vault, eval_ybar_S, weights, pools["S_tr"].ybar, train_weights,
+                                  cfg, device, args.boot, rng)
         result["classifiers"][name] = res
         print(f"== {name}")
         for k, v in res["risks"].items():
             print(f"  {k:<8} {v['value']:.5f}  (se {v['se']:.5f})")
+        for k, v in res["in_sample_training_ybar"].items():
+            print(f"  {k + ' (on training ybar, diagnostic)':<8} {v:.5f}")
         for k, v in res["diffs"].items():
             print(f"  {k:<10} {v['diff']:+.5f}  (se {v['se']:.5f}, z {v['z']:+.2f}, within 3se: {v['within_3se']})")
     result["source_only_1epoch_train_loss"] = hist[0]["train_loss_mean"]
