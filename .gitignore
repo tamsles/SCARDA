@@ -1,0 +1,9 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+# created by the original main.py
+dataset/
+result/
+# SCARDA raw runs (summary/ and checks/ are tracked)
+results/runs/

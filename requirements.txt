@@ -1,0 +1,11 @@
+# Python >= 3.10 (tested with 3.10.11)
+# GPU (CUDA 12.4 wheels):  pip install -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cu124
+# CPU only:                pip install -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.5.1
+torchvision==0.20.1
+numpy==2.2.6
+scipy==1.15.3
+pyyaml==6.0.4
+pandas==2.3.3
+matplotlib==3.10.9
+pytest==9.2.0
