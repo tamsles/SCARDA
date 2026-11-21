@@ -34,3 +34,17 @@ def make_evaluator(vault: LabelVault, K: int, device, bs: int = 4096) -> Callabl
         return {"target_acc": accuracy(pred, y), "target_bal_acc": balanced_accuracy(pred, y, K)}
 
     return evaluate
+
+
+@torch.no_grad()
+def true_ovr_losses(model: torch.nn.Module, vault: LabelVault, device, bs: int = 4096) -> torch.Tensor:
+    """Per-sample true-label OVR loss on T_eval, ell(f_y) + sum_{k!=y} ell(-f_k), float64 [n].
+    Used only by the risk-identity check (scripts/check_identity.py), never in training."""
+    x, y = vault.eval_set()
+    was_training = model.training
+    model.eval()
+    logits = torch.cat([model(x[i:i + bs].to(device)) for i in range(0, len(x), bs)]).double().cpu()
+    model.train(was_training)
+    on = torch.nn.functional.one_hot(y.long(), logits.shape[1]).double()
+    sp = torch.nn.functional.softplus
+    return (on * sp(-logits) + (1.0 - on) * sp(logits)).sum(dim=1)
