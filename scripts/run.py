@@ -20,6 +20,7 @@ from scarda.data import build_mnist, format_pool_report  # noqa: E402
 from scarda.evaluate import make_evaluator  # noqa: E402
 from scarda.io_utils import (MetricsWriter, device_info, env_info, git_info, now_iso, run_dir,  # noqa: E402
                              write_config, write_json)
+from scarda.oracle import oracle_weights_from_vault  # noqa: E402
 from scarda.train import METRIC_COLUMNS, final_metrics, resolve_device, train  # noqa: E402
 
 
@@ -54,6 +55,8 @@ def main(argv=None) -> int:
     write_json(out / "meta.json", meta)
 
     evaluator = make_evaluator(vault, cfg.K, device)
+    # oracle_iw: weights come from S_tr true labels via oracle.py; train() never sees the vault
+    source_weights = oracle_weights_from_vault(vault, pools["S_tr"], cfg) if cfg.method == "oracle_iw" else None
     writer = MetricsWriter(out / "metrics.csv", METRIC_COLUMNS)
 
     def on_epoch(row):
@@ -63,7 +66,7 @@ def main(argv=None) -> int:
               f"t {row['epoch_time']:.2f}s", flush=True)
 
     t0 = time.perf_counter()
-    history = train(cfg, pools, evaluator, on_epoch=on_epoch)
+    history = train(cfg, pools, evaluator, on_epoch=on_epoch, source_weights=source_weights)
     meta.update({"end_time": now_iso(), "elapsed_sec": time.perf_counter() - t0})
     write_json(out / "meta.json", meta)
     final = final_metrics(history)

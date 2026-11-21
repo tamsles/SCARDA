@@ -21,6 +21,7 @@ from scarda.config import load_config  # noqa: E402
 from scarda.data import build_mnist  # noqa: E402
 from scarda.evaluate import make_evaluator  # noqa: E402
 from scarda.io_utils import device_info, env_info  # noqa: E402
+from scarda.oracle import oracle_weights_from_vault  # noqa: E402
 from scarda.train import resolve_device, train  # noqa: E402
 
 
@@ -38,7 +39,8 @@ def main(argv=None) -> int:
     pools, vault, _ = build_mnist(cfg)
     t_data = time.perf_counter() - t0
     evaluator = make_evaluator(vault, cfg.K, device)
-    hist = train(cfg, pools, evaluator, epochs=args.epochs)
+    sw = oracle_weights_from_vault(vault, pools["S_tr"], cfg) if cfg.method == "oracle_iw" else None
+    hist = train(cfg, pools, evaluator, epochs=args.epochs, source_weights=sw)
     times = [r["epoch_time"] for r in hist]
     rest = times[1:] or times
     print(f"method={cfg.method} steps/epoch={hist[0]['step']} data_build={t_data:.2f}s")

@@ -8,7 +8,7 @@ from pathlib import Path
 
 import yaml
 
-METHODS_M1 = ("source_only", "target_only")
+METHODS = ("source_only", "target_only", "oracle_iw")
 # Fields that do not affect results and are excluded from the config hash.
 NON_SEMANTIC = ("device", "data_root", "out_root")
 
@@ -41,8 +41,8 @@ class Config:
     out_root: str = "results/runs"
 
     def __post_init__(self):
-        if self.method not in METHODS_M1:
-            raise ValueError(f"method {self.method!r} not supported (available: {METHODS_M1})")
+        if self.method not in METHODS:
+            raise ValueError(f"method {self.method!r} not supported (available: {METHODS})")
         if self.gen not in ("bernoulli", "single_uniform"):
             raise ValueError(f"unknown gen {self.gen!r}")
         if self.correction not in ("abs", "relu", "none"):

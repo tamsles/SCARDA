@@ -1,7 +1,8 @@
-"""Training loop (SPEC §3.3, §7). M1 supports `source_only` and `target_only`.
+"""Training loop (SPEC §3.3, §7). Supports `source_only`, `target_only` and `oracle_iw`.
 
-This module only receives WeakSets (x, ybar) and an opaque evaluator callback; it never sees
-true labels. The evaluator's output is logged and never used for any decision.
+This module only receives WeakSets (x, ybar), an opaque evaluator callback and, for `oracle_iw`,
+precomputed per-sample weights for S_tr (built by oracle.py); it never sees true labels.
+The evaluator's output is logged and never used for any decision.
 """
 from __future__ import annotations
 
@@ -52,13 +53,37 @@ def weak_val_risk(model: torch.nn.Module, val: WeakSet, pi_te: torch.Tensor, dev
     return float(out.total.item())
 
 
-def method_setup(cfg, pools: dict[str, WeakSet]) -> tuple[WeakSet, np.ndarray]:
-    """(training pool, prior used in the risk) for each method (SPEC §3.3)."""
+Weights = tuple[torch.Tensor, torch.Tensor]
+
+
+def method_setup(cfg, pools: dict[str, WeakSet], source_weights: Optional[Weights] = None
+                 ) -> tuple[WeakSet, np.ndarray, Optional[torch.Tensor]]:
+    """(training pool, prior used in the risk, fixed pibar or None for batch mode) per method (SPEC §3.3)."""
+    if (cfg.method == "oracle_iw") != (source_weights is not None):
+        raise ValueError("source_weights must be given for oracle_iw and only for oracle_iw")
     if cfg.method == "source_only":
-        return pools["S_tr"], uniform_prior(cfg.K)
+        return pools["S_tr"], uniform_prior(cfg.K), None
     if cfg.method == "target_only":
-        return pools["T_tr"], target_prior(cfg.K, cfg.rho)  # oracle prior (SPEC §3.3)
+        return pools["T_tr"], target_prior(cfg.K, cfg.rho), None  # oracle prior (SPEC §3.3)
+    if cfg.method == "oracle_iw":
+        # weighted -> pibar_mode=fixed with the observable T_tr frequency (SPEC §3.2)
+        return pools["S_tr"], target_prior(cfg.K, cfg.rho), pools["T_tr"].pibar_hat()
     raise ValueError(f"method {cfg.method!r} not implemented")
+
+
+def weight_diagnostics(w_pos: torch.Tensor, w_neg: torch.Tensor, ybar: torch.Tensor) -> tuple[float, float, float]:
+    """(ess_pos_mean, ess_neg_mean, w_max) of one batch. ESS ratio (sum w)^2 / (m sum w^2) per
+    non-empty (k,s) group (SPEC §8), averaged over groups; w_max over in-group entries."""
+    def ess(w, mask):
+        m = mask.sum(dim=0)
+        s1, s2 = (w * mask).sum(dim=0), (w * w * mask).sum(dim=0)
+        ok = (m > 0) & (s2 > 0)
+        return float((s1[ok] ** 2 / (m[ok] * s2[ok])).mean().item()) if bool(ok.any()) else float("nan")
+
+    Yp = ybar.to(w_pos.dtype)
+    Yn = 1.0 - Yp
+    w_max = float(torch.maximum((w_pos * Yp).max(), (w_neg * Yn).max()).item())
+    return ess(w_pos, Yp), ess(w_neg, Yn), w_max
 
 
 def train(
@@ -67,11 +92,32 @@ def train(
     evaluator: Callable[[torch.nn.Module], dict],
     on_epoch: Optional[Callable[[dict], None]] = None,
     epochs: Optional[int] = None,
+    source_weights: Optional[Weights] = None,
 ) -> list[dict]:
+    return fit(cfg, pools, evaluator, on_epoch=on_epoch, epochs=epochs, source_weights=source_weights)[1]
+
+
+def fit(
+    cfg,
+    pools: dict[str, WeakSet],
+    evaluator: Callable[[torch.nn.Module], dict],
+    on_epoch: Optional[Callable[[dict], None]] = None,
+    epochs: Optional[int] = None,
+    source_weights: Optional[Weights] = None,
+) -> tuple[torch.nn.Module, list[dict]]:
+    """Train and return (model, per-epoch history). `source_weights` = (w_pos, w_neg) over the
+    full S_tr pool, required for oracle_iw only."""
     device = resolve_device(cfg.device)
     epochs = cfg.epochs if epochs is None else epochs
-    train_set, pi = method_setup(cfg, pools)
+    train_set, pi, pibar_fixed = method_setup(cfg, pools, source_weights)
     pi_t = torch.as_tensor(pi, dtype=torch.float32, device=device)
+    weighted = source_weights is not None
+    if weighted:
+        w_pos_all = source_weights[0].to(device=device, dtype=torch.float32)
+        w_neg_all = source_weights[1].to(device=device, dtype=torch.float32)
+        if w_pos_all.shape != train_set.ybar.shape or w_neg_all.shape != train_set.ybar.shape:
+            raise ValueError("source_weights must match the S_tr ybar shape")
+        pibar_t = pibar_fixed.to(device=device, dtype=torch.float32)
     pi_te = torch.as_tensor(target_prior(cfg.K, cfg.rho), dtype=torch.float32)
 
     torch.manual_seed(cfg.seed)  # init_seed = seed (SPEC §4.5)
@@ -90,10 +136,21 @@ def train(
         model.train()
         loss_sum = neg_sum = 0.0
         ep_sum = en_sum = 0
+        ess_p_sum = ess_n_sum = 0.0
+        w_max = float("-inf")
         for _ in range(steps_per_epoch):
             idx = next(batches).to(device)
-            out = scar_ovr_risk(model(x_all[idx]), yb_all[idx], pi_t,
-                                correction=cfg.correction, pibar_mode="batch")
+            if weighted:
+                wp, wn = w_pos_all[idx], w_neg_all[idx]
+                out = scar_ovr_risk(model(x_all[idx]), yb_all[idx], pi_t, pibar=pibar_t, w_pos=wp, w_neg=wn,
+                                    correction=cfg.correction, pibar_mode="fixed")
+                e_p, e_n, w_m = weight_diagnostics(wp, wn, yb_all[idx])
+                ess_p_sum += e_p
+                ess_n_sum += e_n
+                w_max = max(w_max, w_m)
+            else:
+                out = scar_ovr_risk(model(x_all[idx]), yb_all[idx], pi_t,
+                                    correction=cfg.correction, pibar_mode="batch")
             opt.zero_grad(set_to_none=True)
             out.total.backward()
             opt.step()
@@ -113,15 +170,17 @@ def train(
             "target_acc": ev["target_acc"], "target_bal_acc": ev["target_bal_acc"],
             "neg_rate": neg_sum / steps_per_epoch,
             "empty_pos": ep_sum / steps_per_epoch, "empty_neg": en_sum / steps_per_epoch,
-            # weight diagnostics are undefined for unweighted methods
-            "ess_pos_mean": float("nan"), "ess_neg_mean": float("nan"), "w_max": float("nan"),
+            # weight diagnostics: nan for unweighted methods; no KMM for oracle_iw
+            "ess_pos_mean": ess_p_sum / steps_per_epoch if weighted else float("nan"),
+            "ess_neg_mean": ess_n_sum / steps_per_epoch if weighted else float("nan"),
+            "w_max": w_max if weighted else float("nan"),
             "fallback": float("nan"), "kmm_iters_mean": float("nan"),
             "epoch_time": time.perf_counter() - t0,
         }
         history.append(row)
         if on_epoch is not None:
             on_epoch(row)
-    return history
+    return model, history
 
 
 def final_metrics(history: list[dict]) -> dict:
