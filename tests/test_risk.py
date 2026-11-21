@@ -273,3 +273,79 @@ def test_argument_validation():
         scar_ovr_risk(logits, ybar, pi, correction="clip")
     with pytest.raises(ValueError):
         scar_ovr_risk(logits, ybar, pi, torch.zeros(K), -torch.ones(n, K), None, "abs", "fixed")
+
+
+# ----------------------------------------------------------------------------- T6 risk identity (synthetic)
+import numpy as np  # noqa: E402
+import torch.nn.functional as F  # noqa: E402
+
+import _synth as S  # noqa: E402
+from scarda.oracle import oracle_weights  # noqa: E402
+
+T6_R, T6_NS, T6_NT = 200, 5000, 5000
+_rng_w = np.random.default_rng(7)
+T6_CLASSIFIERS = {
+    "prototype": (S.MU.copy(), np.array([0.3, -0.2, 0.1])),
+    "random": (_rng_w.standard_normal((S.K, S.D)), _rng_w.standard_normal(S.K)),
+}
+
+
+def _ovr_true(logits, y):
+    """(a) OVR risk with true labels: mean_i [ell(f_y) + sum_{k!=y} ell(-f_k)]."""
+    lf, lmf = F.softplus(-logits), F.softplus(logits)
+    on = torch.zeros_like(logits)
+    on[torch.arange(len(y)), y] = 1.0
+    return float((on * lf + (1 - on) * lmf).sum(dim=1).mean())
+
+
+def _t6_repetitions(W, b, seed=12345):
+    rng = np.random.default_rng(seed)
+    W, b = torch.as_tensor(W), torch.as_tensor(b)
+    pi_te = torch.as_tensor(S.PI_TE)
+    out = {"a": [], "b": [], "c": [], "ctrl": []}
+    for _ in range(T6_R):
+        xs, ys, ybs = S.sample(T6_NS, S.PI_TR, S.C_TR, rng)
+        xt, yt, ybt = S.sample(T6_NT, S.PI_TE, S.C_TE, rng)
+        fs, ft = torch.as_tensor(xs) @ W.T + b, torch.as_tensor(xt) @ W.T + b
+        ybs_t, ybt_t = torch.as_tensor(ybs), torch.as_tensor(ybt)
+        pibar_te_hat = ybt_t.double().mean(dim=0)
+        out["a"].append(_ovr_true(ft, torch.as_tensor(yt)))
+        out["b"].append(float(scar_ovr_risk(ft, ybt_t, pi_te, pibar=pibar_te_hat,
+                                            correction="none", pibar_mode="fixed").total))
+        wp, wn = oracle_weights(ys, ybs, S.PI_TR, S.PI_TE, S.C_TR, S.C_TE, dtype=torch.float64)
+        out["c"].append(float(scar_ovr_risk(fs, ybs_t, pi_te, pibar=pibar_te_hat, w_pos=wp, w_neg=wn,
+                                            correction="none", pibar_mode="fixed").total))
+        # negative control: unweighted source-domain SCAR risk (pi_tr, batch pibar)
+        out["ctrl"].append(float(scar_ovr_risk(fs, ybs_t, torch.as_tensor(S.PI_TR),
+                                               correction="none", pibar_mode="batch").total))
+    return {k: np.asarray(v) for k, v in out.items()}
+
+
+def _paired(u, v):
+    d = u - v
+    return float(d.mean()), float(d.std(ddof=1) / np.sqrt(len(d)))
+
+
+@pytest.mark.parametrize("name", list(T6_CLASSIFIERS))
+def test_T6_risk_identity(name):
+    """(a) true-label target OVR, (b) target weak SCAR risk, (c) oracle-weighted source risk:
+    pairwise mean differences over T6_R repetitions within 3 paired standard errors."""
+    r = _t6_repetitions(*T6_CLASSIFIERS[name])
+    msgs = []
+    for u, v in (("a", "b"), ("a", "c"), ("b", "c")):
+        m, se = _paired(r[u], r[v])
+        msgs.append(f"{u}-{v}: {m:+.5f} (se {se:.5f}, z {m / se:+.2f})")
+        assert abs(m) <= 3 * se, f"[{name}] " + "; ".join(msgs)
+
+
+def test_T6_negative_control_detected():
+    """Power check: the unweighted source risk (pi_tr) must differ clearly from (a).
+
+    Only asserted for the "random" classifier. The "prototype" classifier is nearly symmetric on the
+    symmetric mixture (per-class true risks ≈ 0.51/0.60/0.55), so the prior shift moves its risk by
+    only ≈0.016 vs. a paired SE ≈0.006 (z ≈ -2.6): T6 has low power for that classifier. This was
+    found after the fact and reported in M2; R, n and the classifiers were not changed.
+    """
+    r = _t6_repetitions(*T6_CLASSIFIERS["random"])
+    m, se = _paired(r["a"], r["ctrl"])
+    assert abs(m) > 10 * se, f"negative control not detected: a-ctrl {m:+.5f} (se {se:.5f})"
