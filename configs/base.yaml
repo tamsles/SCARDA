@@ -1,0 +1,25 @@
+# Base configuration (SPEC §4, §7). Override on the CLI: method=... rho=... n_te=... seed=...
+method: source_only
+rho: 20
+n_te: 2000
+seed: 0
+
+K: 10
+n_tr: 20000
+n_te_max: 2000
+n_val: 2000
+n_eval: 3000
+gen: bernoulli
+c_tr: 0.3
+c_te: 0.2
+
+epochs: 100   # SPEC §7 draft default; frozen after M1
+bs: 256
+lr: 0.001
+wd: 0.00001
+hidden: 500
+correction: abs
+
+device: auto
+data_root: dataset/mnist
+out_root: results/runs
