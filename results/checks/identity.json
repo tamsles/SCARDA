@@ -1,5 +1,6 @@
 {
-  "description": "Risk identity check (TASKS M2.4): (a) true-label target OVR risk on T_eval; (b) target weak SCAR risk on T_val (pi_te, pibar=T_val freq); (c) oracle-weighted source risk on S_tr (pi_te, pibar=T_tr freq); control = unweighted source risk (pi_tr). correction=none. SE: nonparametric bootstrap per pool; diff SE = sqrt(SE_u^2+SE_v^2).",
+  "description": "Risk identity check (TASKS M2.4): (a) true-label target OVR risk on T_eval; (b) target weak SCAR risk on T_val (pi_te, pibar=T_val freq); (c) oracle-weighted source risk on S_tr (pi_te, pibar=T_tr freq); control = unweighted source risk (pi_tr). correction=none. (c) and control use an independent redraw of the S_tr complementary labels (not the training labels); in_sample_training_ybar = same on S_tr.ybar, diagnostic only. SE: nonparametric bootstrap per pool; diff SE = sqrt(SE_u^2+SE_v^2).",
+  "fresh_ybar_seed": "SeedSequence([0, 101])",
   "config": {
     "rho": 20.0,
     "n_te": 2000,
@@ -14,7 +15,7 @@
     "seed": "SeedSequence([0, 100])"
   },
   "split_hash": "da3a9ea6a480258721e5cdc136d0da2fe91d3520c3efefda75920f0e4f2485a0",
-  "git_commit": "a9c674cae711272ec067ae315bcc9d7f7e6058f7",
+  "git_commit": "1674a382262cc8e75aa54e7a4fea232a3f735c31",
   "git_dirty": false,
   "git_dirty_files": [],
   "python": "3.10.11",
@@ -24,7 +25,7 @@
   "cpu": "Intel64 Family 6 Model 165 Stepping 2, GenuineIntel",
   "gpu": "NVIDIA GeForce RTX 3070 Laptop GPU",
   "cuda": "12.4",
-  "time": "2026-11-21T17:08:37+09:00",
+  "time": "2026-11-21T17:26:51+09:00",
   "classifiers": {
     "random_init": {
       "risks": {
@@ -37,12 +38,12 @@
           "se": 0.007478919733355152
         },
         "c": {
-          "value": 6.964585401823674,
-          "se": 0.0025342305251876106
+          "value": 6.968349344207267,
+          "se": 0.0024855060540491386
         },
         "control": {
-          "value": 6.9713456478210345,
-          "se": 0.001792288144974067
+          "value": 6.973807156745875,
+          "se": 0.0017895526812259882
         }
       },
       "diffs": {
@@ -53,23 +54,27 @@
           "within_3se": true
         },
         "a-c": {
-          "diff": 0.002855811235954242,
-          "se": 0.0029319082045492443,
-          "z": 0.9740452417722603,
+          "diff": -0.0009081311476384357,
+          "se": 0.0028898964877354036,
+          "z": -0.31424348639908223,
           "within_3se": true
         },
         "b-c": {
-          "diff": -0.008743727610481145,
-          "se": 0.007896617296840576,
-          "z": -1.1072750877745456,
+          "diff": -0.012507669994073822,
+          "se": 0.007881115449140687,
+          "z": -1.58704311271542,
           "within_3se": true
         },
         "a-control": {
-          "diff": -0.003904434761405895,
-          "se": 0.0023207882625791362,
-          "z": -1.6823744002681322,
+          "diff": -0.0063659436862462115,
+          "se": 0.0023186763819027494,
+          "z": -2.74550762492444,
           "within_3se": true
         }
+      },
+      "in_sample_training_ybar": {
+        "c": 6.964585401823661,
+        "control": 6.971345647821037
       },
       "n": {
         "T_eval": 3000,
@@ -89,12 +94,12 @@
           "se": 0.17078561902754036
         },
         "c": {
-          "value": 1.2857557943418145,
-          "se": 0.06182641363279848
+          "value": 1.4836123024912726,
+          "se": 0.06198197994274221
         },
         "control": {
-          "value": 1.516338982881559,
-          "se": 0.040381777885529185
+          "value": 1.705957789141031,
+          "se": 0.04120126999787547
         }
       },
       "diffs": {
@@ -105,23 +110,27 @@
           "within_3se": true
         },
         "a-c": {
-          "diff": 0.16410212728983398,
-          "se": 0.06383169482216983,
-          "z": 2.570856496087247,
+          "diff": -0.03375438085962412,
+          "se": 0.0639823856916826,
+          "z": -0.527557397160513,
           "within_3se": true
         },
         "b-c": {
-          "diff": 0.14278032158598308,
-          "se": 0.18163213671956305,
-          "z": 0.7860961400593635,
+          "diff": -0.055076186563475016,
+          "se": 0.18168514937727478,
+          "z": -0.3031408277024757,
           "within_3se": true
         },
         "a-control": {
-          "diff": -0.06648106124991049,
-          "se": 0.04338972028456679,
-          "z": -1.5321846007280442,
-          "within_3se": true
+          "diff": -0.2560998675093824,
+          "se": 0.044153419919804246,
+          "z": -5.800227207191107,
+          "within_3se": false
         }
+      },
+      "in_sample_training_ybar": {
+        "c": 1.2857557943418025,
+        "control": 1.5163389828815308
       },
       "n": {
         "T_eval": 3000,
