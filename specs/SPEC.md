@@ -87,6 +87,16 @@ $\pi_{\mathrm{te}}$ 在 v1 中**使用已知真值**（来自配置），报告�
 - 类计数：$n\cdot\pi$ 用最大余数法取整，**精确等于**该计数（不是伯努利抽样）。可用量不足时报错。已核算：$\rho=20$ 时 `T_eval` 最大可行规模约 3337，训练侧每类余量 > 2700。
 - `T_tr` 的 $n_{te}=500$ 版本是 2000 版本按类取前缀得到的子集（嵌套，便于配对比较）。
 
+**切分算法（M1 确认）**：
+
+- 最大余数法：$q=\mathrm{round}(n\pi,\,9)$（消除 $0.1\times500=49.999\ldots$ 类浮点误差），先取 $\lfloor q\rfloor$，剩余的 $r=n-\sum\lfloor q\rfloor$ 个单位按小数部分降序分配，**同值时类号小者优先**（稳定排序）。断言总和等于 $n$。
+- 类内打乱：对每个类 $k$，取升序的 $\{i:y_i=k\}$，用切分生成器做一次置换。
+- **固定切分顺序**（与 $n_{te}$ 无关）：在训练集每类的置换上依次连续切出 `S_tr` → `T_tr` 父池（大小 `n_te_max`=2000）→ `T_val`，其余丢弃；`T_eval` 在测试集每类的置换上取前缀。由此 `S_tr`、`T_val`、`T_eval` 在不同 $n_{te}$ 下完全相同；`S_tr` 在不同 $\rho$ 下也相同。
+- 嵌套：$n_{te}<$ `n_te_max` 时，`T_tr` 取父池每类块的前 $c_k(n_{te})$ 行（索引与 $\bar y$ 同取）。断言每类 $c_k(n_{te})\le c_k(\texttt{n\_te\_max})$。
+- 可用量检查：切分前对每类检查 $n_{S,k}+n_{T,k}^{\max}+n_{V,k}\le$ 可用量，`T_eval` 同理；不足时抛 `ValueError` 并列出类号、需求量与可用量。$n_{te}>$ `n_te_max` 也报错。
+- 池内行序为类优先（class-major），类内按置换顺序；训练 loader 另行打乱。
+- 预处理：uint8 图像 `float()/255`，形状 `[n,1,28,28]`，与 `ToTensor()` 逐位相同（已验证）。
+
 ### 4.2 偏移
 
 - $\pi_{\mathrm{tr}}$ 均匀；$\pi_{\mathrm{te},k}\propto\rho^{-k/(K-1)}$，$\rho\in\{5,20\}$；另设 $\rho=1$ 作为无偏移对照（仅少量运行）。
@@ -97,6 +107,9 @@ $\pi_{\mathrm{te}}$ 在 v1 中**使用已知真值**（来自配置），报告�
 - 默认 `gen=bernoulli`：对每个样本、每个 $k\neq y$，独立以概率 $c_d$ 置 $\bar y_k=1$。默认 $c_{tr}=0.3$，$c_{te}=0.2$（所有 $k$ 相同）。
 - 可选 `gen=single_uniform`：等同 SCARCE `random`（$c=1/(K-1)$）。
 - 由 `label_seed` 控制；每个池独立生成。
+- `T_tr` 的 $\bar y$ 在父池（`n_te_max`）上生成后再按行取子集，保证 500 版本的 $\bar y$ 与 2000 版本对应行相同。`T_eval` 不生成 $\bar y$。
+- `gen=single_uniform` 时忽略配置中的 $c_{tr},c_{te}$，实际使用 $c=1/(K-1)$，并把实际值写入 `meta.json`。
+- 注：`bernoulli` 下全零行约占 T 侧 $0.8^9\approx13.4\%$、S 侧 $0.7^9\approx4\%$，符合 §2 设定。
 
 ### 4.4 可见性隔离（必须由代码结构保证）
 
@@ -104,9 +117,27 @@ $\pi_{\mathrm{te}}$ 在 v1 中**使用已知真值**（来自配置），报告�
 - `oracle.py` 只读取 `S_tr` 的真标签。
 - 记录 split 哈希：各池索引数组与 $\bar y$ 数组的 sha256。
 
+**结构约定（M1 确认）**：
+
+- `scarda/data.py` 的构建函数（`build_from_arrays` / `build_mnist`）是**唯一**同时接触 $x$ 与 $y$ 的代码，用 $y$ 切池、生成 $\bar y$。这是 AGENTS.md §2.1 的唯一例外。torchvision dataset 对象不出函数。
+- `WeakSet` 为 frozen dataclass，字段只有 `name, x, ybar`，**不含索引**（索引加基数据即可反查标签）。
+- `LabelVault` 只保存 `S_tr` 真标签（`source_labels()`，供 `oracle.py`）与 `T_eval` 的 $(x,y)$（`eval_set()`，供 `evaluate.py`）。`T_tr`、`T_val` 的真标签生成 $\bar y$ 后即丢弃。`T_eval` 的 $x$ 也只在 vault 中。
+- 索引、类计数、哈希放在 `SplitRecord`，只交给 `io_utils` 写 `meta.json`，不进入训练。
+- 每 epoch 的 accuracy 由 `evaluate.make_evaluator(vault)` 返回的**不透明回调**计算；`train()` 的签名不含 vault、$y$ 或索引，回调结果只写日志、不参与任何决策。
+- 测试（T4）用自己持有的合成 $y$ 加 `SplitRecord` 的索引做检查，不为测试在 vault 中开后门。
+
+**split 哈希定义（M1 确认）**：
+
+- 每个数组：`sha256(dtype.str ‖ "|" ‖ shape ‖ "|" ‖ bytes)`；索引为 int64 小端、规范行序（见 4.1），$\bar y$ 为 uint8、C 连续。
+- 键：`{S_tr,T_tr,T_val,T_eval}/idx` 与 `{S_tr,T_tr,T_val}/ybar`（`T_eval` 无 $\bar y$）。`T_tr` 哈希的是**实际使用的 $n_{te}$ 子集**。
+- `split_hash` = 对按键排序的 `"key:hex"` 行（换行连接）再取 sha256。
+- 另记 `base_hash`（MNIST train/test targets 的哈希），用于发现数据集版本差异。不哈希 $x$（由索引与基数据唯一决定）。
+
 ### 4.5 Seed
 
 一个 `seed` 决定 split、互补标签与模型初始化（`split_seed=label_seed=init_seed=seed`）。同一 seed 下所有方法共享同一份数据，形成配对比较。主实验 seeds = {0,1,2}。
+
+实现（M1 确认）：为避免同一原始种子开多个生成器造成流相关，各用途的 numpy 生成器由 `SeedSequence([seed, tag])` 派生，tag：`split_train=1, split_test=2, ybar_S_tr=3, ybar_T_tr=4, ybar_T_val=5, loader=6`。模型初始化用 `torch.manual_seed(seed)`。报告中说明此派生方式。
 
 ## 5. Oracle 权重（类先验偏移下的精确形式）
 
@@ -139,7 +170,9 @@ $\pi_{\mathrm{te}}$ 在 v1 中**使用已知真值**（来自配置），报告�
 - 模型：根目录 `models.mlp_model(784, 500, 10)`；在 `scarda/models.py` 中子类化，增加 `features(x)` 返回隐层，`forward` 不变。
 - 优化：Adam，lr=1e-3，wd=1e-5，bs=256（SCARCE README 默认值）。
 - 训练预算按**优化步数**统一：每"epoch" = $\lceil n_{tr}/bs\rceil$ 步，所有方法（含 `target_only`，其 loader 循环使用）相同。epoch 数 `E` 在 M1 测完耗时后冻结，草案默认 100。
-- 每 epoch 记录 `T_val` 上的弱标签验证风险：`scar_ovr_risk`，`correction=none`，$\pi_{\mathrm{te}}$，$\bar\pi$ = T_val 经验频率，无权重。
+  - **M1 决定：E = 100（暂定）**，在 M3 冻结时随矩阵一并最终确认（见 §9）。依据为 SPEC 草案默认值与预算；按 AGENTS §2.1，**不使用** `T_eval` accuracy 曲线作为依据。M1 run 中 `train_loss_mean` 至第 100 epoch 仍缓慢下降、`val_weak_risk` 无明确拐点，均不足以支持改动默认值。
+  - loader：每轮重新打乱，保留每轮最后的不完整 batch（等同 `drop_last=False` 的循环 DataLoader）。打乱用 `loader` tag 派生的 `torch.Generator`。
+- 每 epoch 记录 `T_val` 上的弱标签验证风险：`scar_ovr_risk`，`correction=none`，$\pi_{\mathrm{te}}$（**配置中的真值**，与 §3.3 一致），$\bar\pi$ = T_val 经验频率，无权重。
 - 模型选择：**仅对 DIW 的 $B\in\{5,10\}$ 做选择**，规则 = 在 seed 0、$\rho=20$、$n_{te}=2000$ 上，最后 10 个 epoch 的平均 `T_val` 弱标签风险最小者。选定后冻结并写入 `configs/frozen.yaml`。其余超参数固定不调。
 - 主指标：`T_eval` accuracy 的最后 10 个 epoch 均值（沿用 SCARCE）；同时报告最后一个 epoch 的 accuracy 与 balanced accuracy。
 
@@ -152,6 +185,12 @@ $\pi_{\mathrm{te}}$ 在 v1 中**使用已知真值**（来自配置），报告�
 - `metrics.csv`：每 epoch 一行：`epoch, step, train_loss_mean, val_weak_risk, target_acc, target_bal_acc, neg_rate, empty_pos, empty_neg, ess_pos_mean, ess_neg_mean, w_max, fallback, kmm_iters_mean, epoch_time`
 - `final.json`：`acc_last10, acc_last, bal_acc_last10, bal_acc_last`
 
+M1 确认的补充约定：
+
+- `meta.json` 在上述字段之外还记录：`split_hashes`（各池哈希）、`base_hash`、`pools`（各池目标/实际类计数、经验 $\hat{\bar\pi}$、$\pi_{tr}$、$\pi_{te}$、实际 $c_{tr},c_{te}$）、`git_dirty_files`、`config_hash`、GPU 型号与 CUDA 版本。
+- `metrics.csv`：`neg_rate, empty_pos, empty_neg` 为该 epoch 内各 step 的平均值；无权重方法的 `ess_pos_mean, ess_neg_mean, w_max, fallback, kmm_iters_mean` 写 `nan`；`epoch_time` 包含 `T_val` 弱标签风险与 `T_eval` 评估。
+- 配置哈希不包含 `device, data_root, out_root`（不影响结果的字段）。
+
 ESS 比例定义为 $(\sum w)^2/(m\sum w^2)$，按组计算后对 $(k,s)$ 取平均。`final.json` 存在时跳过该 run（支持断点续跑）。
 
 汇总：`scripts/summarize.py` 只读 `results/runs/`，输出 `results/summary/main_table.{csv,md}`、`paired_diffs.csv`（各方法减 `source_only`，按 seed 配对，给出均值、标准差、95% t 区间）、`fig_acc_vs_nte.png`、`fig_ess.png`，并生成 `results/summary/REPORT_FACTS.md`（报告可引用的数字清单，每条注明来源文件）。
@@ -160,6 +199,24 @@ ESS 比例定义为 $(\sum w)^2/(m\sum w^2)$，按组计算后对 $(k,s)$ 取平
 
 方法 {source_only, target_only, oracle_iw, diw, diw_combined} × $\rho$ {5, 20} × $n_{te}$ {500, 2000} × seed {0,1,2}。
 `source_only` 与 $n_{te}$ 无关，去重后共 54 次。另加 $\rho=1$ 下 `source_only` 与 `diw` 各 1 个 seed 作为无偏移对照。若 M1 测得耗时不允许，优先砍 $\rho=5$，不砍 seed。
+
+### 9.1 计算平台
+
+- 主实验（M4）及 M3 的 DIW 耗时测量在**东京大学 Wisteria/BDEC-01** 上进行（GPU 节点，具体资源组以实际申请为准）。矩阵内所有 run 应在同一平台、同一软件环境下完成；`meta.json` 已记录 GPU 型号与 CUDA 版本。
+- M1 的耗时数据来自本地开发机（NVIDIA GeForce RTX 3070 Laptop GPU，torch 2.5.1+cu124）：`source_only` 每 epoch 0.28–0.31 s（79 步，含评估），建池约 1.4 s。该数字**不可直接用于 Wisteria 上的预算**，须在 Wisteria 上重跑 `scripts/bench_time.py`。
+- M1 的本地 run（`source_only_rho20_nte2000_seed0_9bb48ece`，git dirty）是开发验证 run，不计入主矩阵。
+
+### 9.2 矩阵规模决策规则（M1 提出，M3 冻结时执行）
+
+设 Wisteria 上 DIW（含 `diw_combined`）每 epoch 耗时为 $t$ 秒，可同时运行的作业数为 $P$，M4 可用墙钟预算为 $H$ 秒，$E=100$：
+
+| 条件 | 方案 |
+|---|---|
+| $25\cdot E\cdot t/P\le H$ | $E=100$，全量 56 次 |
+| 否则，若 $13\cdot E\cdot t/P\le H$ | $E=100$，按本节砍掉 $\rho=5$（保留全部 seed） |
+| 否则 | 停下汇报，由人类决定降 $E$ 或优化求解器（不得改为 ADIW 式的 warm start / 少量迭代） |
+
+25 = 全量矩阵中 DIW 类 run 数（`diw` 12 + `diw_combined` 12 + $\rho=1$ 对照 1）；13 = 砍掉 $\rho=5$ 后的数量。非 DIW 的 31 次 run 按 `source_only` 速度估计，开销可忽略，但仍计入总预算。$P$、$H$ 由人类根据 Wisteria 的配额确定。
 
 ## 10. 目录结构
 

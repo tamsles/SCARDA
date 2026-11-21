@@ -23,6 +23,7 @@ support shift / IOS 实验、CIFAR / CLCIFAR、DANN / CLARINET 等额外基线�
 
 1. **目标域真标签只能出现在 `scarda/evaluate.py` 和 `scarda/oracle.py`（后者仅限训练域池的真标签）**。
    训练、权重估计、模型选择的代码路径不得接触 `y`。不得用目标测试 accuracy 选择 epoch、学习率、B、η 或任何超参数。
+   唯一例外：`scarda/data.py` 的数据池构建函数必须用 `y` 切池并生成 $\bar y$，之后只把 `S_tr` 真标签与 `T_eval` 交给 `LabelVault`（见 SPEC §4.4）。
 2. **不修改根目录的原始 SCARCE 文件**（`main.py`, `utils_algo.py`, `utils_data.py`, `models.py`, `cifar_models/`）。
    新代码全部放在 `scarda/`、`scripts/`、`tests/`、`configs/`。原始 `SCARCE_loss` 作为参照被测试导入。
 3. **不擅自改公式**。若认为 SPEC 中某个公式有误，停止实现该部分，写出推导与反例，交给人类确认后再改 SPEC。
@@ -47,3 +48,4 @@ support shift / IOS 实验、CIFAR / CLCIFAR、DANN / CLARINET 等额外基线�
 - 所有测试在 CPU 上可跑，`pytest -q` 总耗时 < 90 秒；测试不下载 MNIST（用合成数据）。
 - 提交粒度：一个子任务一个 commit，message 以里程碑编号开头，如 `M2: add oracle weights`。
 - 结果目录 `results/runs/` 不进 git；`results/summary/` 与 `results/checks/` 进 git。
+- 计算平台：本地机器用于开发与测试；DIW 耗时测量（M3）和主实验（M4）在东京大学 Wisteria/BDEC-01 上进行（SPEC §9.1）。本地测得的耗时不直接用于 Wisteria 的预算。

@@ -27,11 +27,18 @@
 
 1. `scarda/data.py`：按 SPEC §4 构造四个池、偏移先验、互补标签、`WeakSet` / `LabelVault`、split 哈希。
 2. `scarda/models.py`、`scarda/train.py`（先只支持 `source_only`、`target_only`）、`scarda/evaluate.py`、`scarda/io_utils.py`、`scripts/run.py`。
-3. `tests/test_data.py`（**T4**）：各池类计数精确等于目标计数；池两两不相交；$\bar y$ 从不包含真类；经验 $c$ 与设定值的偏差在 3 个标准误内；同 seed 两次生成哈希一致。
+3. `tests/test_data.py`（**T4**）：各池类计数精确等于目标计数；池两两不相交；$\bar y$ 从不包含真类；经验 $c$ 与设定值的偏差在 3 个标准误内（按池合并估计：$\hat c$ = 该池所有 $k\neq y$ 的 $(i,k)$ 对上 $\bar y_{ik}$ 的均值，$N$ = 这类对的个数，$\mathrm{SE}=\sqrt{c(1-c)/N}$；不逐类检验）；同 seed 两次生成哈希一致。
 4. `scripts/bench_time.py`：测 `source_only` 每 epoch 耗时（以及 GPU/CPU 信息）。
 5. 在真实 MNIST 上跑 `source_only`，$\rho=20$，seed 0，完整 epoch 数。
 
 **验收**：`results/runs/` 下有一个完整 run 的 4 个文件；打印出的各池实际先验与 $\hat{\bar\pi}$ 与设定一致；给出单 epoch 耗时，据此提出 `E` 的冻结值与矩阵规模建议（不自行决定）。
+
+**M1 结果记录**：
+- 状态：子任务 1–5 已完成（commits `da6e207`, `6ff9d21`, `f92510e`, `5c6ba80`）；`pytest -q` 73 passed。
+- 切分、隔离、哈希、seed 的确认方案已写入 SPEC §4.1/§4.3/§4.4/§4.5；训练与输出约定写入 SPEC §7/§8。
+- 本地 run：`results/runs/source_only_rho20_nte2000_seed0_9bb48ece/`（RTX 3070 Laptop，100 epoch，0.307 s/epoch，git dirty），仅作开发验证，不计入主矩阵。
+- 决定：$E=100$（暂定，M3 冻结时最终确认）；矩阵规模在 M3 测得 Wisteria 上的 DIW 耗时后按 SPEC §9.2 的规则决定。计算平台为 Wisteria/BDEC-01（SPEC §9.1）。
+- 小重叠：`target_only` 的训练代码已在 M1 实现，M2 只需跑 run。
 
 ---
 
@@ -58,7 +65,7 @@
    - 空组 / 小组触发 fallback 且计数正确。
 3. `tests/test_isolation.py`（**T8**）：训练入口的签名与数据对象不含真标签；`T_eval` 索引不出现在任何训练侧对象中；用 `ast`/grep 检查训练与权重模块未导入 `LabelVault`。
 4. `tests/test_smoke.py`（**T9**）：合成数据、2 个 epoch，5 种方法各自跑通并写出全部输出文件。
-5. 按 SPEC §7 对 $B\in\{5,10\}$ 做选择，写入 `configs/frozen.yaml`；测 DIW 单 epoch 耗时。
+5. 按 SPEC §7 对 $B\in\{5,10\}$ 做选择，写入 `configs/frozen.yaml`；**在 Wisteria 上**用 `scripts/bench_time.py` 测 `source_only` 与 DIW 的单 epoch 耗时，按 SPEC §9.2 的规则给出矩阵规模建议（$P$、$H$ 与最终方案由人类确认）。
 6. `.github/workflows/ci.yml`：CPU 上运行 `pytest -q`。
 
 **验收**：全部测试通过；`frozen.yaml` 提交；人类确认冻结方法、数据协议、选择规则与矩阵（SPEC §9）后，M3 结束。冻结后只允许修 bug，不加功能。
@@ -69,7 +76,8 @@
 ## M4 主实验（11/23–24）
 
 1. `scripts/run_matrix.py` 读取 `configs/matrix_main.yaml`，支持断点续跑与并行度参数。
-2. 跑完整矩阵 + $\rho=1$ 对照。
+2. 在 Wisteria/BDEC-01 上搭建环境并提交作业（作业脚本的位置与形式待定，开始 M4 前与人类确认）。
+3. 跑 M3 冻结的矩阵（SPEC §9）+ $\rho=1$ 对照，全部 run 在同一平台完成。
 
 **验收**：每个 run 都有 `final.json`；失败的 run 有日志说明原因；不得因结果不理想而删除或重跑某个 seed。
 
