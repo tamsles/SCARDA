@@ -20,7 +20,8 @@ from scarda.data import build_mnist, format_pool_report  # noqa: E402
 from scarda.evaluate import make_evaluator  # noqa: E402
 from scarda.io_utils import MetricsWriter, now_iso, run_dir, run_info, write_config, write_json  # noqa: E402
 from scarda.oracle import source_oracle_weights  # noqa: E402
-from scarda.train import METRIC_COLUMNS, final_metrics, fit, resolve_device  # noqa: E402
+from scarda.config import DIW_METHODS  # noqa: E402
+from scarda.train import METRIC_COLUMNS, diw_schedule, final_metrics, fit, resolve_device  # noqa: E402
 
 
 def main(argv=None) -> int:
@@ -43,6 +44,8 @@ def main(argv=None) -> int:
     write_config(out, cfg)
     meta = {"seed": cfg.seed, **run_info(device),
             "pools": {k: v for k, v in info.items() if k != "indices"}, "start_time": now_iso()}
+    if cfg.method in DIW_METHODS:
+        meta["diw"] = diw_schedule(cfg, pools)  # warm-up switch point (SPEC §6.8), B_te size, eta
     write_json(out / "meta.json", meta)
 
     evaluator = make_evaluator(labels.eval_x, labels.eval_y, cfg.K, device)

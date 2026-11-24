@@ -22,7 +22,8 @@ import torch
 
 POOLS = ("S_tr", "T_tr", "T_val", "T_eval")
 WEAK_POOLS = ("S_tr", "T_tr", "T_val")
-SEED_TAGS = {"split_train": 1, "split_test": 2, "ybar_S_tr": 3, "ybar_T_tr": 4, "ybar_T_val": 5, "loader": 6}
+SEED_TAGS = {"split_train": 1, "split_test": 2, "ybar_S_tr": 3, "ybar_T_tr": 4, "ybar_T_val": 5, "loader": 6,
+             "target_batch": 7}
 
 
 def rng_for(seed: int, purpose: str) -> np.random.Generator:

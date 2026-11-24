@@ -20,6 +20,12 @@ wd: 0.00001
 hidden: 500
 correction: abs
 
+# DIW (SPEC §6); ignored by the other methods
+B: 10
+eps: 0.05
+min_group: 4
+diw_warmup_epochs: 5
+
 device: auto
 data_root: dataset/mnist
 out_root: results/runs

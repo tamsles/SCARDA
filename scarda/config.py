@@ -8,9 +8,13 @@ from pathlib import Path
 
 import yaml
 
-METHODS = ("source_only", "target_only", "oracle_iw")
+METHODS = ("source_only", "target_only", "oracle_iw", "diw", "diw_combined")
+DIW_METHODS = ("diw", "diw_combined")
 # Fields that do not affect results and are excluded from the config hash.
 NON_SEMANTIC = ("device", "data_root", "out_root")
+# DIW-only fields (SPEC §6): excluded from the hash of the other methods, which they do not affect
+# (this keeps the run directory names of the non-DIW methods unchanged).
+DIW_FIELDS = ("B", "eps", "min_group", "diw_warmup_epochs")
 
 
 @dataclass(frozen=True)
@@ -35,6 +39,11 @@ class Config:
     wd: float = 1e-5
     hidden: int = 500
     correction: str = "abs"
+    # DIW (SPEC §6)
+    B: float = 10.0  # KMM weight upper bound
+    eps: float = 0.05  # KMM sum constraint |sum w - m| <= m * eps
+    min_group: int = 4  # groups with |G_tr| or |G_te| below this get weight 1 (fallback)
+    diw_warmup_epochs: int = 5  # source_only objective for the first epochs
     # environment (not hashed)
     device: str = "auto"
     data_root: str = "dataset/mnist"
@@ -51,6 +60,10 @@ class Config:
             raise ValueError(f"n_te={self.n_te} must be in (0, n_te_max={self.n_te_max}]")
         if self.rho <= 0:
             raise ValueError("rho must be positive")
+        if not (0 <= self.eps < 1) or self.B < 1 - self.eps:
+            raise ValueError("need 0 <= eps < 1 and B >= 1 - eps (KMM feasibility)")
+        if self.min_group < 1 or self.diw_warmup_epochs < 0:
+            raise ValueError("need min_group >= 1 and diw_warmup_epochs >= 0")
 
     @property
     def effective_c(self) -> tuple[float, float]:
@@ -94,5 +107,6 @@ def config_dict(cfg: Config) -> dict:
 
 
 def config_hash(cfg: Config) -> str:
-    d = {k: v for k, v in config_dict(cfg).items() if k not in NON_SEMANTIC}
+    skip = NON_SEMANTIC + (() if cfg.method in DIW_METHODS else DIW_FIELDS)
+    d = {k: v for k, v in config_dict(cfg).items() if k not in skip}
     return hashlib.sha256(yaml.safe_dump(d, sort_keys=True).encode("utf-8")).hexdigest()
