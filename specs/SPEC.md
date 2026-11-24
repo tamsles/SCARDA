@@ -68,6 +68,8 @@ scar_ovr_risk(logits[n,K], ybar[n,K], pi[K], pibar[K] | None,
 | `diw` | S_tr（+ T_tr 仅用于估权重） | $\pi_{\mathrm{te}}$ | fixed $\hat{\bar\pi}_{\mathrm{te}}$ | DIW（第 6 节） | η=0 |
 | `diw_combined` | S_tr + T_tr | $\pi_{\mathrm{te}}$ | 同上 | DIW | $J=\eta\hat R^{\mathrm{T\_tr}}+(1-\eta)\hat R^{\mathrm{DIW}}$，$\eta=n_{te}/(n_{tr}+n_{te})$，两项各自修正 |
 
+`diw_combined` 的 $\hat R^{\mathrm{T\_tr}}$（M3 确认）：每个 step 在 §6 第 1 步为 KMM 抽取的**同一个** $B_{te}$（从 T_tr 有放回，大小 $\min(256,n_{te})$）上计算，无权重，$\pi_{\mathrm{te}}$，`pibar_mode=fixed` 取 $\hat{\bar\pi}_{\mathrm{te}}$，`correction` 与 $\hat R^{\mathrm{DIW}}$ 相同。Warm-up 期间（§6 第 8 步）只用 `source_only` 目标，不含 T_tr 项。
+
 $\pi_{\mathrm{te}}$ 在 v1 中**使用已知真值**（来自配置），报告中声明为 oracle prior。类先验估计不在范围内。
 
 ## 4. 数据协议

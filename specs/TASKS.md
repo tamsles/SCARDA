@@ -100,6 +100,24 @@
 - **T7 未完全通过（待人类决定）**：按 SPEC §6 的停止准则（相对目标变化 < 1e-6 或 1000 次）求解时，与 SLSQP 的目标相对差在测试问题上为 4.3e-5–3.3e-4（8 个问题中 5 个超过 1e-4），对应 $w$ 的相对误差约 6%；求解到收敛（5000 次、tol=0）时相对差 ≤ 4.7e-7，SLSQP 与 trust-constr 互相一致到约 1e-9，说明算法与投影正确，问题出在停止准则。**人类决定（M3）：放宽 T7 容差至 1e-3，SPEC §6 停止准则不变**（1e-3 依据：所有试过的问题上观测最大相对差 6.3e-4）。另保留一项"求解到收敛时相对差 < 1e-4"的测试作为算法正确性证据。
 - 本地短 run（开发验证，不计入矩阵；工作区未提交）：`results/runs/diw_rho20_nte2000_seed0_a6238fd3/`，epochs=10。无 NaN；epoch 6–10：ESS 比例 + 0.434–0.440、− 0.526–0.535；`w_max`=10（触到 B）；fallback 每 step 平均 0–0.013；`kmm_iters_mean` 395–406；每 epoch 79.7–110.3 s（warm-up 约 0.29 s）。另：`diw_combined`（warm-up=0）1 epoch，1580 个已求解组迭代数 63–765（中位数 407），无一组触到 1000 次上限，136 s/epoch。本地耗时不用于 Wisteria 预算。
 
+**M3 独立审查记录（子任务 1–2，2026-11-24，审查范围 `cd2f0e7..0171605`）**：
+- 结论：未发现与 SPEC §6 / §3.3 不一致之处，未发现 ADIW 式简化，未发现真标签进入训练或权重估计路径。以下各项均为审查时实际核对，代码未改动。
+- 逐项核对（读代码）：分组 $g=2k+s$ 与 `reshape` 往返一致；$\sigma$ 为 $B_{tr}\cup B_{te}$ 的 $i<j$ 两两距离中位数（全 batch 共用，不按组）；$K$ 只取 $G_{tr}$，$\kappa_i=\tfrac{m}{m'}\sum_{j\in G_{te}}k(z_i,z_j)$（$B_{te}$ 中重复样本按重数计）；盒约束与和约束带；投影 = 带内直接 clip，否则对最近的带边界二分 $\lambda$；步长 $1/\lambda_{\max}(K)$；每次调用从 $w=\mathbf 1$ 开始，停止准则为 $|f_t-f_{t-1}|<10^{-6}|f_{t-1}|$ 或 1000 次，各组独立停止；`min_group` 判据对 $G_{tr}$、$G_{te}$ 都生效，fallback 组权重为 1 并计数。跨 step 无任何缓存（无 warm start、无迭代数上限以外的截断）。
+- 数值核对（审查脚本，未入库）：
+  - `diw_weights` 对比独立的逐组 numpy 构造（$m\neq m'$，$(|B_{tr}|,|B_{te}|,K)$ = (96,60,5)、(32,256,10)、(256,256,10)）：$\sigma$ 完全相同；权重与单组 `kmm_pgd` 的最大差 ≤ 3.2e-13（批量 padding 不改变结果）；组外权重为 0；约束满足；与 SLSQP 的目标相对差 ≤ 2.0e-4（在已放宽的 1e-3 内）。
+  - `project_box_sum` 对比 SLSQP 求解的投影 QP（40 个随机输入，含越上/下带边界）：最大差 9.4e-11。
+  - Warm-up（`n_tr=1024`，warm-up=2，CPU）：`diw` 与 `diw_combined` 的 epoch 1–2 与 `source_only` 逐位相同，epoch 3 起出现 DIW 诊断；`switch_step` = warm-up × 每 epoch 步数 + 1，与实际一致。
+  - `diw_combined`（warm-up=0，单步）：`fit` 的 loss 与手工计算的 $\eta\hat R^{\mathrm{T\_tr}}+(1-\eta)\hat R^{\mathrm{DIW}}$ 逐位相同，$\eta=n_{te}/(n_{tr}+n_{te})$，两项各自 `abs` 修正。
+  - 权重 `requires_grad=False`。
+- 标签路径：`fit` 只接收 `WeakSet`（$x,\bar y$）与 evaluator 回调；`source_oracle_weights` 仅在 `method == "oracle_iw"` 时调用，`fit` 对其他方法传入 `source_weights` 会报错；`diw_weights` 的输入只有 $z$ 与 $\bar y$；`T_eval` 的 accuracy 只写日志。
+- 发现的问题与人类决定（M3）：第 1 条修，第 2 条确认现有实现，第 3–5 条只记录不修。
+  1. **T7 不覆盖 `diw_weights` 中的 $m/m'$ 系数与带宽取法**〔已修〕。scipy 对比测试的 $\kappa$ 是测试自己构造的，经过 `diw_weights` 的测试只有 $m=m'$ 的同样本用例和可行性检查。变异测试：把系数改成 $m'/m$、去掉系数、$\sigma$ 只用 $B_{tr}$，`tests/test_diw.py` 三种情况都是 9 passed。当前代码正确（见上方数值核对），缺的是回归保护。修正：新增 `test_T7_diw_weights_match_per_group_reference`（$m\neq m'$，两组规模），用独立的 numpy 逐组构造 $\sigma$、$K$、$\kappa$ 后单组求解，比较权重（atol 1e-9）；上述三个变异体在新测试上全部失败。$\sigma$ 的参照取下中位数（偶数个距离时取较小的中间值，与 `torch.median` 一致）。`diw.py` 未改动。
+  2. **`diw_combined` 的 $\hat R^{\mathrm{T\_tr}}$ 用哪个 batch，SPEC 未规定**〔已确认现有实现，写入 SPEC §3.3〕。实现复用 KMM 的 $B_{te}$（有放回、256）、无权重、fixed $\hat{\bar\pi}_{te}$；warm-up 期间没有 T_tr 项。
+  3. **`meta.json` 的切换点是按配置算的，不是观测到的**：`epochs ≤ diw_warmup_epochs` 时仍会写出一个从未发生的 `switch_epoch/switch_step`。主矩阵（E=100）不触发。
+  4. **诊断口径**：`ess_*_mean` 把 fallback 组（ESS=1）也计入平均；触到 1000 次上限的组数没有记录（只有 `kmm_iters_mean`）。SPEC §8 未要求，当前 fallback 率下影响可忽略。
+  5. **配置校验允许 $B\in[1-\epsilon,1)$**，此时起点 $w=\mathbf 1$ 不满足盒约束（第一次投影后恢复可行）。$B\in\{5,10\}$ 不触发。
+- 说明（不是问题）：每个 epoch 最后一个 batch 只有 32 个样本（20000 mod 256，§7 的 loader 约定），$B_{te}$ 仍为 256，本地 run 中的 fallback（每 step 平均 0–0.013）来自这个 batch。
+
 **验收**：全部测试通过；`frozen.yaml` 提交；人类确认冻结方法、数据协议、选择规则与矩阵（SPEC §9）后，M3 结束。冻结后只允许修 bug，不加功能。
 **止损**：若 DIW 训练出现 NaN / 权重退化（ESS 比例长期 < 0.05）且当天无法定位，上报；主结果改为 source/target/oracle 三者，DIW 作为部分结果与失败分析。
 
