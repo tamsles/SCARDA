@@ -85,7 +85,7 @@
 
 1. `scarda/diw.py`（SPEC §6），`train.py` 支持 `diw`、`diw_combined`，记录全部诊断字段。
 2. `tests/test_diw.py`（**T7**）：
-   - 求解器与 `scipy.optimize.minimize`（SLSQP 或 trust-constr）在随机小问题上目标值相对差 < 1e-4，且约束满足；
+   - 求解器与 `scipy.optimize.minimize`（SLSQP 或 trust-constr）在随机小问题上目标值相对差 < 1e-3（原为 1e-4，M3 人类决定放宽，见下方记录），且约束满足；
    - $G_{te}$ 与 $G_{tr}$ 是同一组样本时，权重 ≈ 1；
    - 空组 / 小组触发 fallback 且计数正确。
 3. 按 SPEC §7 对 $B\in\{5,10\}$ 做选择，写入 `configs/frozen.yaml`；**在 Wisteria 上**用 `scripts/bench_time.py` 测 `source_only` 与 DIW 的单 epoch 耗时，按 SPEC §9.2 的规则给出矩阵规模建议（$P$、$H$ 与最终方案由人类确认）。
@@ -96,8 +96,8 @@
 - `scarda/diw.py`：逐 mini-batch KMM（SPEC §6）。核 $k(a,b)=\exp(-\|a-b\|^2/(2\sigma^2))$，$\sigma$ = $B_{tr}\cup B_{te}$ 的 $z$ 两两距离（$i<j$）中位数；组号 $g=2k+(0:+,1:-)$；可解组 padding 后批量求解，各组按自己的准则停止；float64 计算。
 - `train.py`：`diw` / `diw_combined`。$B_{te}$ 由新增 seed tag `target_batch=7` 的 `torch.Generator` 有放回抽取，仅在 warm-up 后抽取；warm-up 用 `source_only` 目标（$\pi_{tr}$、batch $\bar\pi$）。`diw_combined` 的 $\hat R^{\mathrm{T\_tr}}$ 在同一个 $B_{te}$ 上计算，无权重、fixed $\hat{\bar\pi}_{te}$；该方法 `neg_rate/empty_*` 记录的是 $\hat R^{\mathrm{DIW}}$ 项。切换点、$|B_{te}|$、$\eta$ 写入 `meta.json` 的 `diw`。
 - 配置：新增 `B, eps, min_group, diw_warmup_epochs`；这 4 个字段不计入非 DIW 方法的配置哈希，已有三个 run 的目录名不变。
-- 验证：改动前后 `source_only/target_only/oracle_iw` 在 $(\rho,n_{te})\in\{(20,2000),(5,500)\}$、seed 0、CPU 上训练 2 epoch，全部指标与模型参数共 192 项逐位相同；`diw` 的 warm-up epoch 1–2 与 `source_only` 逐位相同。`pytest -q`：101 passed, 2 xfailed。
-- **T7 未完全通过（待人类决定）**：按 SPEC §6 的停止准则（相对目标变化 < 1e-6 或 1000 次）求解时，与 SLSQP 的目标相对差在测试问题上为 4.3e-5–3.3e-4（8 个问题中 5 个超过 1e-4），对应 $w$ 的相对误差约 6%；以 `xfail(strict)` 记录。求解到收敛（5000 次、tol=0）时相对差 ≤ 4.7e-7，SLSQP 与 trust-constr 互相一致到约 1e-9，说明算法与投影正确，问题出在停止准则。需决定：放宽 T7 容差，或修改 SPEC §6 的停止准则。
+- 验证：改动前后 `source_only/target_only/oracle_iw` 在 $(\rho,n_{te})\in\{(20,2000),(5,500)\}$、seed 0、CPU 上训练 2 epoch，全部指标与模型参数共 192 项逐位相同；`diw` 的 warm-up epoch 1–2 与 `source_only` 逐位相同。`pytest -q`：103 passed。
+- **T7 未完全通过（待人类决定）**：按 SPEC §6 的停止准则（相对目标变化 < 1e-6 或 1000 次）求解时，与 SLSQP 的目标相对差在测试问题上为 4.3e-5–3.3e-4（8 个问题中 5 个超过 1e-4），对应 $w$ 的相对误差约 6%；求解到收敛（5000 次、tol=0）时相对差 ≤ 4.7e-7，SLSQP 与 trust-constr 互相一致到约 1e-9，说明算法与投影正确，问题出在停止准则。**人类决定（M3）：放宽 T7 容差至 1e-3，SPEC §6 停止准则不变**（1e-3 依据：所有试过的问题上观测最大相对差 6.3e-4）。另保留一项"求解到收敛时相对差 < 1e-4"的测试作为算法正确性证据。
 - 本地短 run（开发验证，不计入矩阵；工作区未提交）：`results/runs/diw_rho20_nte2000_seed0_a6238fd3/`，epochs=10。无 NaN；epoch 6–10：ESS 比例 + 0.434–0.440、− 0.526–0.535；`w_max`=10（触到 B）；fallback 每 step 平均 0–0.013；`kmm_iters_mean` 395–406；每 epoch 79.7–110.3 s（warm-up 约 0.29 s）。另：`diw_combined`（warm-up=0）1 epoch，1580 个已求解组迭代数 63–765（中位数 407），无一组触到 1000 次上限，136 s/epoch。本地耗时不用于 Wisteria 预算。
 
 **验收**：全部测试通过；`frozen.yaml` 提交；人类确认冻结方法、数据协议、选择规则与矩阵（SPEC §9）后，M3 结束。冻结后只允许修 bug，不加功能。

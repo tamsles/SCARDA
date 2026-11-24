@@ -72,16 +72,14 @@ def test_T7_pgd_converged_matches_scipy(seed):
     assert max(_rel_gaps(res, problems)) < 1e-4
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "Open issue (M3): the SPEC §6 stopping rule (relative objective change < 1e-6 or 1000 iterations) "
-    "stops PGD early on these problems; objective gap vs SLSQP ~1e-5..6e-4. Needs a human decision."))
 @pytest.mark.parametrize("seed", [0, 1])
 def test_T7_pgd_spec_rule_matches_scipy(seed):
-    """T7 as written in TASKS M3.2, with the SPEC §6 stopping rule (solver defaults)."""
+    """T7 with the SPEC §6 stopping rule (solver defaults). Tolerance relaxed from 1e-4 to 1e-3 by
+    human decision (M3): the rule stops early, gaps observed 4.3e-5..6.3e-4 (see TASKS M3 record)."""
     problems = [_problem(*p, seed=100 * seed + i) for i, p in enumerate(PROBLEMS)]
     Kb, kb, mask = _batch(problems)
     res = kmm_pgd(Kb, kb, mask, B, EPS)
-    assert max(_rel_gaps(res, problems)) < 1e-4
+    assert max(_rel_gaps(res, problems)) < 1e-3
 
 
 @pytest.mark.parametrize("seed", [0, 1])
