@@ -1,7 +1,8 @@
 #!/bin/bash
 # Step 1: .venv + requirements + MNIST download, GPU check, unit tests.
 # Idempotent; if compute nodes have no internet access, run it once on a login node first
-# (REPO=$PWD LOGDIR=/tmp bash scripts/wisteria/1_setup.sh), then the job step only re-checks.
+# (mkdir -p /tmp/$USER; REPO=$PWD LOGDIR=/tmp/$USER ALLOW_NO_GPU=1 bash scripts/wisteria/1_setup.sh);
+# the job step then only re-checks (and requires the GPU).
 source "$REPO/scripts/wisteria/common.sh"
 echo "[setup] $(date) host=$(hostname) repo=$REPO"
 # all runs must come from one committed code version: refuse modified tracked files
