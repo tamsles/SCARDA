@@ -151,3 +151,41 @@ def test_T7_fallback_counts_with_larger_min_group():
     assert out.fallback == K
     assert out.iters.numel() == K
     torch.testing.assert_close(out.w_pos[:, 2], ytr[:, 2].double(), rtol=0, atol=0)
+
+
+@pytest.mark.parametrize("n_tr,n_te,K,seed", [(96, 60, 5, 0), (32, 256, 10, 1)])
+def test_T7_diw_weights_match_per_group_reference(n_tr, n_te, K, seed):
+    """diw_weights vs an independent per-group construction (SPEC §6.3-6.5) with m != m': sigma from
+    B_tr ∪ B_te, K over G_tr, kappa_i = (m/m') sum_{j in G_te} k(z_i, z_j). Guards the m/m' factor and
+    the bandwidth choice, which the scipy comparison above (kappa built by the test) does not reach."""
+    rng = np.random.default_rng(seed)
+    z_tr = np.maximum(rng.normal(size=(n_tr, 30)), 0.0)
+    z_te = np.maximum(rng.normal(size=(n_te, 30)) + 0.4, 0.0)
+    y_tr = (rng.random((n_tr, K)) < 0.27).astype(np.float64)
+    y_te = (rng.random((n_te, K)) < 0.18).astype(np.float64)
+    out = diw_weights(torch.tensor(z_tr), torch.tensor(y_tr), torch.tensor(z_te), torch.tensor(y_te), B, EPS, 4)
+
+    z_all = np.concatenate([z_tr, z_te])
+    d = np.sqrt(((z_all[:, None, :] - z_all[None, :, :]) ** 2).sum(-1))[np.triu_indices(len(z_all), 1)]
+    sigma = np.sort(d)[(len(d) - 1) // 2]  # torch.median convention: lower middle value
+    assert abs(out.sigma - sigma) <= 1e-12 * sigma
+
+    def k(a, b):
+        return np.exp(-((a[:, None, :] - b[None, :, :]) ** 2).sum(-1) / (2.0 * sigma ** 2))
+
+    solved = 0
+    for kk in range(K):
+        for s, W in ((1.0, out.w_pos), (0.0, out.w_neg)):
+            gt, ge = y_tr[:, kk] == s, y_te[:, kk] == s
+            w = W[:, kk].numpy()
+            assert (w[~gt] == 0).all()
+            if gt.sum() < 4 or ge.sum() < 4:
+                assert (w[gt] == 1).all()
+                continue
+            m, mp = gt.sum(), ge.sum()
+            Kg = torch.tensor(k(z_tr[gt], z_tr[gt]))[None]
+            kap = torch.tensor(m / mp * k(z_tr[gt], z_te[ge]).sum(axis=1))[None]
+            ref = kmm_pgd(Kg, kap, torch.ones(1, int(m), dtype=torch.float64), B, EPS).w[0].numpy()
+            np.testing.assert_allclose(w[gt], ref, rtol=0, atol=1e-9)
+            solved += 1
+    assert solved == 2 * K - out.fallback and solved > 0
