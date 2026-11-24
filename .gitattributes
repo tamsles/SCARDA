@@ -1,0 +1,2 @@
+# job scripts run under bash on Wisteria: always LF
+*.sh text eol=lf
