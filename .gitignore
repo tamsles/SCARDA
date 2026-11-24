@@ -7,3 +7,6 @@ dataset/
 result/
 # SCARDA raw runs (summary/ and checks/ are tracked)
 results/runs/
+scripts/wisteria/env.sh
+# Wisteria pipeline logs (synced back, not tracked)
+results/logs/
