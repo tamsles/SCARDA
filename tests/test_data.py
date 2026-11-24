@@ -154,6 +154,6 @@ def test_config_overrides_and_validation(tmp_path):
     with pytest.raises(ValueError):
         load_config(p, ["bogus=1"])
     with pytest.raises(ValueError):
-        load_config(p, ["method=diw"])
+        load_config(p, ["method=adiw"])  # not a supported method (ADIW is out of scope)
     with pytest.raises(ValueError):
         load_config(p, ["n_te=3000"])
