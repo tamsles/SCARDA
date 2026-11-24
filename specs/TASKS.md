@@ -18,7 +18,7 @@
 
 **M0 审查遗留（已知、暂不处理）**：
 - T1 float64 的 1e-6 容差余量有限：`SCARCE_loss` 用 float32 构造先验（`utils_algo.py` L34–36，`ccp` 与 0.9 差约 2.4e-8），测试传入精确 float64 `1/K`。随机对称 logits 下实测差 9e-8–5.9e-7；非对称 logits（±10）下约 2.4e-6，会超过 1e-6。改用逐位相同的先验后差 ≤ 4e-15。判断为参照实现的精度问题而非 `risk.py` 的 bug，为可读性不在测试中处理。若今后 T1 在新用例上失败，先排查此原因。
-- `scar_ovr_risk` 不检查权重中的 NaN/inf：NaN 能通过 `w < 0` 的校验；组外的 inf 乘以掩码 0 得 NaN。两者都会使 `total` 变为 NaN 且不报错。SPEC 未要求此校验，留到 M3 实现 DIW 时根据权重来源决定是否处理。
+- `scar_ovr_risk` 不检查权重中的 NaN/inf：NaN 能通过 `w < 0` 的校验；组外的 inf 乘以掩码 0 得 NaN。两者都会使 `total` 变为 NaN 且不报错。SPEC 未要求此校验，留到 M3 实现 DIW 时根据权重来源决定是否处理。〔M3 决定：`scar_ovr_risk` 不加检查，在权重来源处检查。理由：DIW 权重是投影 `clip(v-λ,0,B)` 的结果，输入有限时必在 $[0,B]$ 内、组外为 0；非有限值只可能来自非有限表示 $z$ 或带宽 $\sigma\le0$（`clamp` 会传播 NaN）。`diw.diw_weights` 对 $z$ 有限、$\sigma>0$、输出权重有限三处检查，失败时抛 `FloatingPointError` 并中止该 run，报错信息能指出原因；在 `scar_ovr_risk` 再查一次不会多发现任何 DIW 情形。oracle 权重是一次性计算的固定表，默认配置下有限，$c_{tr}=1$ 的路径见 M2 遗留。`risk.py` 未改动。〕
 - `scarda/risk.py::batch_pibar` 未被调用（死代码），对整数 ybar 固定返回 float32，与主路径跟随 logits dtype 不一致。〔已解决：M2 后重构中删除〕
 
 ---
@@ -91,6 +91,14 @@
 3. 按 SPEC §7 对 $B\in\{5,10\}$ 做选择，写入 `configs/frozen.yaml`；**在 Wisteria 上**用 `scripts/bench_time.py` 测 `source_only` 与 DIW 的单 epoch 耗时，按 SPEC §9.2 的规则给出矩阵规模建议（$P$、$H$ 与最终方案由人类确认）。
 
 （2026-11-21 精简：原 T8 标签隔离结构测试、T9 smoke 测试、CI 已移除，见 AGENTS §1。）
+
+**M3 进度记录（子任务 1–2）**：
+- `scarda/diw.py`：逐 mini-batch KMM（SPEC §6）。核 $k(a,b)=\exp(-\|a-b\|^2/(2\sigma^2))$，$\sigma$ = $B_{tr}\cup B_{te}$ 的 $z$ 两两距离（$i<j$）中位数；组号 $g=2k+(0:+,1:-)$；可解组 padding 后批量求解，各组按自己的准则停止；float64 计算。
+- `train.py`：`diw` / `diw_combined`。$B_{te}$ 由新增 seed tag `target_batch=7` 的 `torch.Generator` 有放回抽取，仅在 warm-up 后抽取；warm-up 用 `source_only` 目标（$\pi_{tr}$、batch $\bar\pi$）。`diw_combined` 的 $\hat R^{\mathrm{T\_tr}}$ 在同一个 $B_{te}$ 上计算，无权重、fixed $\hat{\bar\pi}_{te}$；该方法 `neg_rate/empty_*` 记录的是 $\hat R^{\mathrm{DIW}}$ 项。切换点、$|B_{te}|$、$\eta$ 写入 `meta.json` 的 `diw`。
+- 配置：新增 `B, eps, min_group, diw_warmup_epochs`；这 4 个字段不计入非 DIW 方法的配置哈希，已有三个 run 的目录名不变。
+- 验证：改动前后 `source_only/target_only/oracle_iw` 在 $(\rho,n_{te})\in\{(20,2000),(5,500)\}$、seed 0、CPU 上训练 2 epoch，全部指标与模型参数共 192 项逐位相同；`diw` 的 warm-up epoch 1–2 与 `source_only` 逐位相同。`pytest -q`：101 passed, 2 xfailed。
+- **T7 未完全通过（待人类决定）**：按 SPEC §6 的停止准则（相对目标变化 < 1e-6 或 1000 次）求解时，与 SLSQP 的目标相对差在测试问题上为 4.3e-5–3.3e-4（8 个问题中 5 个超过 1e-4），对应 $w$ 的相对误差约 6%；以 `xfail(strict)` 记录。求解到收敛（5000 次、tol=0）时相对差 ≤ 4.7e-7，SLSQP 与 trust-constr 互相一致到约 1e-9，说明算法与投影正确，问题出在停止准则。需决定：放宽 T7 容差，或修改 SPEC §6 的停止准则。
+- 本地短 run（开发验证，不计入矩阵；工作区未提交）：`results/runs/diw_rho20_nte2000_seed0_a6238fd3/`，epochs=10。无 NaN；epoch 6–10：ESS 比例 + 0.434–0.440、− 0.526–0.535；`w_max`=10（触到 B）；fallback 每 step 平均 0–0.013；`kmm_iters_mean` 395–406；每 epoch 79.7–110.3 s（warm-up 约 0.29 s）。另：`diw_combined`（warm-up=0）1 epoch，1580 个已求解组迭代数 63–765（中位数 407），无一组触到 1000 次上限，136 s/epoch。本地耗时不用于 Wisteria 预算。
 
 **验收**：全部测试通过；`frozen.yaml` 提交；人类确认冻结方法、数据协议、选择规则与矩阵（SPEC §9）后，M3 结束。冻结后只允许修 bug，不加功能。
 **止损**：若 DIW 训练出现 NaN / 权重退化（ESS 比例长期 < 0.05）且当天无法定位，上报；主结果改为 source/target/oracle 三者，DIW 作为部分结果与失败分析。
