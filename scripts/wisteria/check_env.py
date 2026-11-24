@@ -12,8 +12,8 @@ dsets.MNIST("dataset/mnist", train=True, download=True)
 dsets.MNIST("dataset/mnist", train=False, download=True)
 print("MNIST ok")
 print("python", sys.version.split()[0], "torch", torch.__version__, "cuda", torch.version.cuda,
-      "available", torch.cuda.is_available())
-if torch.cuda.is_available():
+      "gpus", torch.cuda.device_count())
+if torch.cuda.device_count() > 0:
     print("gpu", torch.cuda.get_device_name(0), "count", torch.cuda.device_count())
 elif os.environ.get("ALLOW_NO_GPU") != "1":
     raise SystemExit("no GPU visible to torch")
